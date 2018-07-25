@@ -50,12 +50,6 @@ static errcode_t ino_add_xattr(ext2_filsys fs, ext2_ino_t ino, const char *name,
 			_("while setting xattrs of inode %u"), ino);
 		goto xattrs_close;
 	}
-	retval = ext2fs_xattrs_write(xhandle);
-	if (retval) {
-		com_err(__func__, retval,
-			_("while writting xattrs of inode %u"), ino);
-		goto xattrs_close;
-	}
 xattrs_close:
 	close_retval = ext2fs_xattrs_close(&xhandle);
 	if (close_retval) {
@@ -135,7 +129,12 @@ static errcode_t set_perms_and_caps(ext2_filsys fs, ext2_ino_t ino,
 
 	/* Permissions */
 	if (params->fs_config_func != NULL) {
-		params->fs_config_func(params->filename, S_ISDIR(inode.i_mode),
+		const char *filename = params->filename;
+		if (strcmp(filename, params->mountpoint) == 0) {
+			/* The root of the filesystem needs to be an empty string. */
+			filename = "";
+		}
+		params->fs_config_func(filename, S_ISDIR(inode.i_mode),
 				       params->target_out, &uid, &gid, &imode,
 				       &capabilities);
 		uid = resolve_ugid(params->uid_map, uid);
@@ -148,7 +147,7 @@ static errcode_t set_perms_and_caps(ext2_filsys fs, ext2_ino_t ino,
 		retval = ext2fs_write_inode(fs, ino, &inode);
 		if (retval) {
 			com_err(__func__, retval,
-				_("while writting inode %u"), ino);
+				_("while writing inode %u"), ino);
 			return retval;
 		}
 	}
@@ -199,7 +198,7 @@ static errcode_t set_timestamp(ext2_filsys fs, ext2_ino_t ino,
 	retval = ext2fs_write_inode(fs, ino, &inode);
 	if (retval) {
 		com_err(__func__, retval,
-			_("while writting inode %u"), ino);
+			_("while writing inode %u"), ino);
 		goto end;
 	}
 
@@ -305,10 +304,7 @@ errcode_t __android_configure_fs(ext2_filsys fs, char *src_dir,
 	if (strlen(mountpoint) == 1 && mountpoint[0] == '/')
 		params.path = "";
 
-	retval = set_selinux_xattr(fs, EXT2_ROOT_INO, &params);
-	if (retval)
-		return retval;
-	retval = set_timestamp(fs, EXT2_ROOT_INO, &params);
+	retval = androidify_inode(fs, EXT2_ROOT_INO, &params);
 	if (retval)
 		return retval;
 

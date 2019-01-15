@@ -117,7 +117,6 @@ cc_defaults {
 }
 
 tune2fs_libs = [
-    "libext2_com_err",
     "libext2_blkid",
     "libext2_quota",
     "libext2_uuid",
@@ -269,6 +268,21 @@ cc_binary {
         "libext2_blkid",
         "libext2_com_err",
         "libext2_quota",
+    ],
+    system_shared_libs: ["libc", "libdl"],
+}
+
+//##########################################################################
+// Build filefrag
+
+cc_binary {
+    name: "filefrag",
+    host_supported: true,
+    defaults: ["e2fsprogs-defaults"],
+
+    srcs: ["filefrag.c"],
+    shared_libs: [
+        "libext2fs",
     ],
     system_shared_libs: ["libc", "libdl"],
 }

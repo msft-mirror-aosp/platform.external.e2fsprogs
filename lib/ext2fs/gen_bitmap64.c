@@ -665,8 +665,7 @@ int ext2fs_test_block_bitmap_range2(ext2fs_block_bitmap gen_bmap,
 						 bmap, block);
 
 	if (EXT2FS_IS_32_BITMAP(bmap)) {
-		if ((block & ~0xffffffffULL) ||
-		    ((block+num-1) & ~0xffffffffULL)) {
+		if ((block+num-1) & ~0xffffffffULL) {
 			ext2fs_warn_bitmap2((ext2fs_generic_bitmap) bmap,
 					    EXT2FS_UNMARK_ERROR, 0xffffffff);
 			return EINVAL;
@@ -686,8 +685,7 @@ int ext2fs_test_block_bitmap_range2(ext2fs_block_bitmap gen_bmap,
 	end >>= bmap->cluster_bits;
 	num = end - block;
 
-	if ((block < bmap->start) || (block > bmap->end) ||
-	    (block+num-1 > bmap->end)) {
+	if ((block < bmap->start) || (block+num-1 > bmap->end)) {
 		ext2fs_warn_bitmap(EXT2_ET_BAD_BLOCK_TEST, block,
 				   bmap->description);
 		return EINVAL;
@@ -706,8 +704,7 @@ void ext2fs_mark_block_bitmap_range2(ext2fs_block_bitmap gen_bmap,
 		return;
 
 	if (EXT2FS_IS_32_BITMAP(bmap)) {
-		if ((block & ~0xffffffffULL) ||
-		    ((block+num-1) & ~0xffffffffULL)) {
+		if ((block+num-1) & ~0xffffffffULL) {
 			ext2fs_warn_bitmap2((ext2fs_generic_bitmap) bmap,
 					    EXT2FS_UNMARK_ERROR, 0xffffffff);
 			return;
@@ -727,8 +724,7 @@ void ext2fs_mark_block_bitmap_range2(ext2fs_block_bitmap gen_bmap,
 	end >>= bmap->cluster_bits;
 	num = end - block;
 
-	if ((block < bmap->start) || (block > bmap->end) ||
-	    (block+num-1 > bmap->end)) {
+	if ((block < bmap->start) || (block+num-1 > bmap->end)) {
 		ext2fs_warn_bitmap(EXT2_ET_BAD_BLOCK_MARK, block,
 				   bmap->description);
 		return;
@@ -747,8 +743,7 @@ void ext2fs_unmark_block_bitmap_range2(ext2fs_block_bitmap gen_bmap,
 		return;
 
 	if (EXT2FS_IS_32_BITMAP(bmap)) {
-		if ((block & ~0xffffffffULL) ||
-		    ((block+num-1) & ~0xffffffffULL)) {
+		if ((block+num-1) & ~0xffffffffULL) {
 			ext2fs_warn_bitmap2((ext2fs_generic_bitmap) bmap,
 					    EXT2FS_UNMARK_ERROR, 0xffffffff);
 			return;
@@ -768,8 +763,7 @@ void ext2fs_unmark_block_bitmap_range2(ext2fs_block_bitmap gen_bmap,
 	end >>= bmap->cluster_bits;
 	num = end - block;
 
-	if ((block < bmap->start) || (block > bmap->end) ||
-	    (block+num-1 > bmap->end)) {
+	if ((block < bmap->start) || (block+num-1 > bmap->end)) {
 		ext2fs_warn_bitmap(EXT2_ET_BAD_BLOCK_UNMARK, block,
 				   bmap->description);
 		return;

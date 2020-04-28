@@ -105,31 +105,29 @@ installdirs: $(INSTALLDIRS_TGT)
 	$(Q) $(MKDIR_P) $(DESTDIR)$(root_sbindir) \
 		$(DESTDIR)$(man8dir) $(DESTDIR)$(root_sysconfdir)
 
-install-udev: installdirs-udev
+install-udev:
 	$(Q) for i in $(UDEV_RULES); do \
 		$(ES) "	INSTALL $(UDEV_RULES_DIR)/$$i"; \
-		$(INSTALL_DATA) $$i $(DESTDIR)$(UDEV_RULES_DIR)/96-$$i; \
+		$(INSTALL_PROGRAM) $$i $(DESTDIR)$(UDEV_RULES_DIR)/96-$$i; \
 	done
 
-install-crond: installdirs-crond
-	$(Q) if test -n "$(CRONTABS)" ; then \
-		$(ES) "	INSTALL $(CROND_DIR)/e2scrub_all" ; \
-		$(INSTALL_DATA) e2scrub_all.cron $(DESTDIR)$(CROND_DIR)/e2scrub_all ; \
-	fi
+install-crond:
+	$(Q) for i in $(CRONTABS); do \
+		$(ES) "	INSTALL $(CROND_DIR)/$$i"; \
+		$(INSTALL_PROGRAM) $$i $(DESTDIR)$(CROND_DIR)/$$i; \
+	done
 
-install-libprogs: $(LIBPROGS) installdirs-libprogs
+install-libprogs: $(LIBPROGS)
 	$(Q) for i in $(LIBPROGS); do \
 		$(ES) "	INSTALL $(pkglibdir)/$$i"; \
 		$(INSTALL_PROGRAM) $$i $(DESTDIR)$(pkglibdir)/$$i; \
 	done
 
-install-systemd: $(SERVICE_FILES) installdirs-systemd
+install-systemd: $(SERVICE_FILES)
 	$(Q) for i in $(SERVICE_FILES); do \
 		$(ES) "	INSTALL_DATA $(SYSTEMD_SYSTEM_UNIT_DIR)/$$i"; \
 		$(INSTALL_DATA) $$i $(DESTDIR)$(SYSTEMD_SYSTEM_UNIT_DIR)/$$i; \
 	done
-
-install-strip: install
 
 install: $(PROGS) $(MANPAGES) $(FMANPAGES) installdirs $(INSTALL_TGT)
 	$(Q) for i in $(PROGS); do \
@@ -154,9 +152,9 @@ uninstall-udev:
 	done
 
 uninstall-crond:
-	if test -n "$(CRONTABS)" ; then \
-		$(RM) -f $(DESTDIR)$(CROND_DIR)/e2scrub_all ; \
-	fi
+	for i in $(CRONTABS); do \
+		$(RM) -f $(DESTDIR)$(CROND_DIR)/$$i; \
+	done
 
 uninstall-libprogs:
 	for i in $(LIBPROGS); do \
@@ -180,7 +178,7 @@ uninstall: $(UNINSTALL_TGT)
 	done
 
 clean::
-	$(RM) -f $(PROGS) $(MANPAGES) $(CONFFILES) $(UDEV_RULES) $(SERVICE_FILES) $(CRONTABS) $(LIBPROGS)
+	$(RM) -f $(PROGS)
 
 mostlyclean: clean
 distclean: clean

@@ -441,8 +441,7 @@ static int defrag_fadvise(int fd, struct move_extent defrag_data,
 			offset += pagesize;
 			continue;
 		}
-		if ((errno = posix_fadvise(fd, offset,
-					   pagesize, fadvise_flag)) != 0) {
+		if (posix_fadvise(fd, offset, pagesize, fadvise_flag) < 0) {
 			if ((mode_flag & DETAIL) && flag) {
 				perror("\tFailed to fadvise");
 				flag = 0;
@@ -1017,9 +1016,7 @@ static int get_best_count(ext4_fsblk_t block_count)
 	int ret;
 	unsigned int flex_bg_num;
 
-	if (blocks_per_group == 0)
-		return 1;
-
+	/* Calculate best extents count */
 	if (feature_incompat & EXT4_FEATURE_INCOMPAT_FLEX_BG) {
 		flex_bg_num = 1 << log_groups_per_flex;
 		ret = ((block_count - 1) /
@@ -1056,8 +1053,6 @@ static int file_statistic(const char *file, const struct stat64 *buf,
 	struct fiemap_extent_list *logical_list_head = NULL;
 
 	defraged_file_count++;
-	if (defraged_file_count > total_count)
-		total_count = defraged_file_count;
 
 	if (mode_flag & DETAIL) {
 		if (total_count == 1 && regular_count == 1)
@@ -1424,8 +1419,6 @@ static int file_defrag(const char *file, const struct stat64 *buf,
 	struct fiemap_extent_group	*orig_group_tmp = NULL;
 
 	defraged_file_count++;
-	if (defraged_file_count > total_count)
-		total_count = defraged_file_count;
 
 	if (mode_flag & DETAIL) {
 		printf("[%u/%u]", defraged_file_count, total_count);
@@ -1515,7 +1508,10 @@ static int file_defrag(const char *file, const struct stat64 *buf,
 		goto out;
 	}
 
-	best = get_best_count(blk_count);
+	if (current_uid == ROOT_UID)
+		best = get_best_count(blk_count);
+	else
+		best = 1;
 
 	if (file_frags_start <= best)
 		goto check_improvement;
@@ -1809,16 +1805,17 @@ int main(int argc, char *argv[])
 					  block_size, unix_io_manager, &fs);
 			if (ret) {
 				if (mode_flag & DETAIL)
-					fprintf(stderr,
-						"Warning: couldn't get file "
-						"system details for %s: %s\n",
-						dev_name, error_message(ret));
-			} else {
-				blocks_per_group = fs->super->s_blocks_per_group;
-				feature_incompat = fs->super->s_feature_incompat;
-				log_groups_per_flex = fs->super->s_log_groups_per_flex;
-				ext2fs_close_free(&fs);
+					com_err(argv[1], ret,
+						"while trying to open file system: %s",
+						dev_name);
+				continue;
 			}
+
+			blocks_per_group = fs->super->s_blocks_per_group;
+			feature_incompat = fs->super->s_feature_incompat;
+			log_groups_per_flex = fs->super->s_log_groups_per_flex;
+
+			ext2fs_close_free(&fs);
 		}
 
 		switch (arg_type) {

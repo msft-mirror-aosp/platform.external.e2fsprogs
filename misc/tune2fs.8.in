@@ -94,7 +94,7 @@ tune2fs \- adjust tunable filesystem parameters on ext2/ext3/ext4 filesystems
 ]
 device
 .SH DESCRIPTION
-.B tune2fs
+.BI tune2fs
 allows the system administrator to adjust various tunable filesystem
 parameters on Linux ext2, ext3, or ext4 filesystems.  The current values
 of these options can be displayed by using the
@@ -331,7 +331,7 @@ must be run from a rescue floppy in order to effect this transition.
 On some distributions, such as Debian, if an initial ramdisk is used,
 the initrd scripts will automatically convert an ext2 root filesystem
 to ext3 if the
-.B /etc/fstab
+.BR /etc/fstab
 file specifies the ext3 filesystem for the root filesystem in order to
 avoid requiring the use of a rescue floppy to add an ext3 journal to
 the root filesystem.
@@ -550,7 +550,7 @@ extended attributes per file.
 currently only supports setting this filesystem feature.
 .TP
 .B encrypt
-Enable support for file system level encryption.
+Enable file system level encryption.
 .B Tune2fs
 currently only supports setting this filesystem feature.
 .TP
@@ -631,11 +631,6 @@ keep a high watermark for the unused inodes in a filesystem, to reduce
 time.  The first e2fsck run after enabling this feature will take the
 full time, but subsequent e2fsck runs will take only a fraction of the
 original time, depending on how full the file system is.
-.TP
-.B verity
-Enable support for verity protected files.
-.B Tune2fs
-currently only supports setting this filesystem feature.
 .RE
 .IP
 After setting or clearing
@@ -658,9 +653,9 @@ feature,
 can be run to convert existing directories to the hashed B-tree format.
 Enabling certain filesystem features may prevent the filesystem from being
 mounted by kernels which do not support those features.  In particular, the
-.B uninit_bg
+.BR uninit_bg
 and
-.B flex_bg
+.BR flex_bg
 features are only supported by the ext4 filesystem.
 .TP
 .BI \-r " reserved-blocks-count"
@@ -671,13 +666,13 @@ Sets 'quota' feature on the superblock and works on the quota files for the
 given quota type. Quota options could be one or more of the following:
 .RS 1.2i
 .TP
-.B [^]usrquota
+.BR [^]usrquota
 Sets/clears user quota inode in the superblock.
 .TP
-.B [^]grpquota
+.BR [^]grpquota
 Sets/clears group quota inode in the superblock.
 .TP
-.B [^]prjquota
+.BR [^]prjquota
 Sets/clears project quota inode in the superblock.
 .RE
 .TP

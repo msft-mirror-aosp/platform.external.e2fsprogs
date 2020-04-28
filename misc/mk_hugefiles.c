@@ -427,8 +427,7 @@ static blk64_t calc_overhead(ext2_filsys fs, blk64_t num)
 	e_blocks2 = (e_blocks + extents_per_block - 1) / extents_per_block;
 	e_blocks3 = (e_blocks2 + extents_per_block - 1) / extents_per_block;
 	e_blocks4 = (e_blocks3 + extents_per_block - 1) / extents_per_block;
-	return (e_blocks + e_blocks2 + e_blocks3 + e_blocks4) *
-		EXT2FS_CLUSTER_RATIO(fs);
+	return e_blocks + e_blocks2 + e_blocks3 + e_blocks4;
 }
 
 /*
@@ -568,8 +567,7 @@ errcode_t mk_hugefiles(ext2_filsys fs, const char *device_name)
 		num_blocks = fs_blocks / num_files;
 	}
 
-	num_slack += (calc_overhead(fs, num_blocks ? num_blocks : fs_blocks) *
-		      num_files);
+	num_slack += calc_overhead(fs, num_blocks) * num_files;
 	num_slack += (num_files / 16) + 1; /* space for dir entries */
 	goal = get_start_block(fs, num_slack);
 	goal = round_up_align(goal, align, part_offset);

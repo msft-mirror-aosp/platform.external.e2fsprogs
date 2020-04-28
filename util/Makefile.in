@@ -9,7 +9,7 @@ top_builddir = ..
 my_dir = util
 INSTALL = @INSTALL@
 
-SRCS = $(srcdir)/subst.c $(srcdir)/mkutf8data.c
+SRCS = $(srcdir)/subst.c
 
 @MCONFIG@
 
@@ -19,7 +19,7 @@ SRCS = $(srcdir)/subst.c $(srcdir)/mkutf8data.c
 	$(Q) $(CHECK_CMD) $(ALL_CFLAGS) $<
 	$(Q) $(CPPCHECK_CMD) $(CPPFLAGS) $<
 
-PROGS=		subst symlinks mkutf8data
+PROGS=		subst symlinks
 
 all:: $(PROGS) gen-tarball
 
@@ -32,10 +32,6 @@ subst.o: dirpaths.h
 subst: subst.o
 	$(E) "	LD $@"
 	$(Q) $(BUILD_CC) $(BUILD_LDFLAGS) -o subst subst.o
-
-mkutf8data: mkutf8data.o
-	$(E) "	LD $@"
-	$(Q) $(BUILD_CC) $(BUILD_LDFLAGS) -o mkutf8data mkutf8data.o
 
 copy_sparse: copy_sparse.o
 	$(E) "	LD $@"
@@ -57,7 +53,7 @@ tarballs: gen-tarball
 
 clean::
 	$(RM) -f $(PROGS) \#* *.s *.o *.a *~ core *.tar.gz gen-tarball \
-		copy-sparse dirpaths.h install-symlink mkutf8data
+		copy-sparse dirpaths.h install-symlink
 
 mostlyclean: clean
 
@@ -70,4 +66,3 @@ distclean: clean
 # the Makefile.in file
 #
 subst.o: $(srcdir)/subst.c $(top_builddir)/lib/config.h dirpaths.h
-mkutf8data.o: $(srcdir)/mkutf8data.c

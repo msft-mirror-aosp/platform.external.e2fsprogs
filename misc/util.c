@@ -91,7 +91,6 @@ void proceed_question(int delay)
 {
 	char buf[256];
 	const char *short_yes = _("yY");
-	const char *english_yes = "yY";
 
 	fflush(stdout);
 	fflush(stderr);
@@ -109,9 +108,7 @@ void proceed_question(int delay)
 		fputs(_("Proceed anyway? (y,N) "), stdout);
 	buf[0] = 0;
 	if (!fgets(buf, sizeof(buf), stdin) ||
-	    strchr(_("nN"), buf[0]) ||
-	    !(strchr(short_yes, buf[0]) ||
-	      strchr(english_yes, buf[0]))) {
+	    strchr(short_yes, buf[0]) == 0) {
 		putc('\n', stdout);
 		exit(1);
 	}

@@ -7,7 +7,6 @@ VPATH = @srcdir@
 top_builddir = ../..
 my_dir = lib/uuid
 INSTALL = @INSTALL@
-MKDIR_P = @MKDIR_P@
 
 @MCONFIG@
 

@@ -144,8 +144,6 @@ errcode_t ext2fs_open_inode_scan(ext2_filsys fs, int buffer_blocks,
 	errcode_t (*save_get_blocks)(ext2_filsys f, ext2_ino_t ino, blk_t *blocks);
 
 	EXT2_CHECK_MAGIC(fs, EXT2_ET_MAGIC_EXT2FS_FILSYS);
-	if (fs->blocksize < 1024)
-		return EXT2_FILSYS_CORRUPTED; /* Should never happen */
 
 	/*
 	 * If fs->badblocks isn't set, then set it --- since the inode
@@ -311,7 +309,6 @@ errcode_t ext2fs_inode_scan_goto_blockgroup(ext2_inode_scan scan,
 {
 	scan->current_group = group - 1;
 	scan->groups_left = scan->fs->group_desc_count - group;
-	scan->bad_block_ptr = 0;
 	return get_next_blockgroup(scan);
 }
 
@@ -334,12 +331,6 @@ static errcode_t check_for_inode_bad_blocks(ext2_inode_scan scan,
 	 */
 	if (blk == 0)
 		return 0;
-
-	/* Make sure bad_block_ptr is still valid */
-	if (scan->bad_block_ptr >= bb->num) {
-		scan->scan_flags &= ~EXT2_SF_CHK_BADBLOCKS;
-		return 0;
-	}
 
 	/*
 	 * If the current block is greater than the bad block listed
@@ -766,8 +757,6 @@ errcode_t ext2fs_read_inode2(ext2_filsys fs, ext2_ino_t ino,
 	int		cache_slot, fail_csum;
 
 	EXT2_CHECK_MAGIC(fs, EXT2_ET_MAGIC_EXT2FS_FILSYS);
-	if (fs->blocksize < 1024)
-		return EXT2_FILSYS_CORRUPTED; /* Should never happen */
 
 	/* Check to see if user has an override function */
 	if (fs->read_inode &&

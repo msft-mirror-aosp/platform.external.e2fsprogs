@@ -81,7 +81,7 @@ static void print_label (char *dev)
 	char label[VOLNAMSZ+1];
 
 	open_e2fs (dev, O_RDONLY);
-	snprintf(label, sizeof(label), "%.*s", EXT2_LEN_STR(sb.s_volume_name));
+	strncpy(label, sb.s_volume_name, VOLNAMSZ);
 	label[VOLNAMSZ] = 0;
 	printf("%s\n", label);
 }

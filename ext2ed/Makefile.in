@@ -8,7 +8,6 @@ VPATH = @srcdir@
 top_builddir = ..
 my_dir = ext2ed
 INSTALL = @INSTALL@
-MKDIR_P = @MKDIR_P@
 
 @MCONFIG@
 

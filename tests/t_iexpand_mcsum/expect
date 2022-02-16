@@ -39,13 +39,13 @@ Change in FS metadata:
 @@ -5 +5 @@
 -Filesystem features:      has_journal ext_attr dir_index filetype extent 64bit sparse_super large_file huge_file uninit_bg dir_nlink extra_isize
 +Filesystem features:      has_journal ext_attr dir_index filetype extent 64bit sparse_super large_file huge_file dir_nlink extra_isize metadata_csum
-@@ -22 +22 @@
+@@ -21 +21 @@
 -Inode blocks per group:   128
 +Inode blocks per group:   256
-@@ -28 +28 @@
+@@ -27 +27 @@
 -Inode size:	          128
 +Inode size:	          256
-@@ -31,0 +32 @@
+@@ -30,0 +31 @@
 +Checksum type:            crc32c
 Pass 1: Checking inodes, blocks, and sizes
 Pass 2: Checking directory structure

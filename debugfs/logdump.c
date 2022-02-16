@@ -33,7 +33,6 @@ extern char *optarg;
 #include "debugfs.h"
 #include "blkid/blkid.h"
 #include "jfs_user.h"
-#include "ext2fs/fast_commit.h"
 #include <uuid/uuid.h>
 
 enum journal_location {JOURNAL_IS_INTERNAL, JOURNAL_IS_EXTERNAL};
@@ -56,7 +55,7 @@ static void dump_journal(char *, FILE *, struct journal_source *);
 
 static void dump_descriptor_block(FILE *, struct journal_source *,
 				  char *, journal_superblock_t *,
-				  unsigned int *, int, __u32, tid_t);
+				  unsigned int *, int, tid_t);
 
 static void dump_revoke_block(FILE *, char *, journal_superblock_t *,
 				  unsigned int, int, tid_t);
@@ -66,14 +65,12 @@ static void dump_metadata_block(FILE *, struct journal_source *,
 				unsigned int, unsigned int, unsigned int,
 				int, tid_t);
 
-static void dump_fc_block(FILE *out_file, char *buf, int blocksize,
-			  int transaction, int *fc_done, int dump_old);
-
 static void do_hexdump (FILE *, char *, int);
 
-#define WRAP(jsb, blocknr, maxlen)					\
-	if (blocknr >= (maxlen))					\
-	    blocknr -= (maxlen - be32_to_cpu((jsb)->s_first));
+#define WRAP(jsb, blocknr)					\
+	if (blocknr >= be32_to_cpu((jsb)->s_maxlen))		\
+		blocknr -= (be32_to_cpu((jsb)->s_maxlen) -	\
+			    be32_to_cpu((jsb)->s_first));
 
 void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		    void *infop EXT2FS_ATTR((unused)))
@@ -85,11 +82,11 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 
 	char		*inode_spec = NULL;
 	char		*journal_fn = NULL;
-	int		journal_fd = -1;
+	int		journal_fd = 0;
 	int		use_sb = 0;
 	ext2_ino_t	journal_inum;
 	struct ext2_inode journal_inode;
-	ext2_file_t 	journal_file = NULL;
+	ext2_file_t 	journal_file;
 	char		*tmp;
 	struct journal_source journal_source;
 	struct ext2_super_block *es = NULL;
@@ -149,6 +146,9 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		goto print_usage;
 	}
 
+	if (current_fs)
+		es = current_fs->super;
+
 	if (inode_spec) {
 		int inode_group, group_offset, inodes_per_block;
 
@@ -159,7 +159,6 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		if (!inode_to_dump)
 			return;
 
-		es = current_fs->super;
 		inode_group = ((inode_to_dump - 1)
 			       / es->s_inodes_per_group);
 		group_offset = ((inode_to_dump - 1)
@@ -174,8 +173,7 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 					* sizeof(struct ext2_inode));
 		printf("Inode %u is at group %u, block %llu, offset %u\n",
 		       inode_to_dump, inode_group,
-		       (unsigned long long) inode_block_to_dump,
-		       inode_offset_to_dump);
+		       inode_block_to_dump, inode_offset_to_dump);
 	}
 
 	if (optind == argc) {
@@ -186,19 +184,19 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		if (!out_file) {
 			com_err(argv[0], errno, "while opening %s for logdump",
 				out_fn);
-			goto cleanup;
+			goto errout;
 		}
 	}
 
-	if (block_to_dump != ANY_BLOCK) {
-		if (check_fs_open(argv[0]))
-			goto cleanup;
-		es = current_fs->super;
+	if (block_to_dump != ANY_BLOCK && current_fs != NULL) {
 		group_to_dump = ((block_to_dump -
 				  es->s_first_data_block)
 				 / es->s_blocks_per_group);
 		bitmap_to_dump = ext2fs_block_bitmap_loc(current_fs, group_to_dump);
 	}
+
+	if (!journal_fn && check_fs_open(argv[0]))
+		goto errout;
 
 	if (journal_fn) {
 		/* Set up to read journal from a regular file somewhere */
@@ -206,24 +204,17 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		if (journal_fd < 0) {
 			com_err(argv[0], errno, "while opening %s for logdump",
 				journal_fn);
-			goto cleanup;
+			goto errout;
 		}
+
 		journal_source.where = JOURNAL_IS_EXTERNAL;
 		journal_source.fd = journal_fd;
-		dump_journal(argv[0], out_file, &journal_source);
-		goto cleanup;
-
-	}
-	if (check_fs_open(argv[0]))
-		goto cleanup;
-	es = current_fs->super;
-
-	if ((journal_inum = es->s_journal_inum)) {
+	} else if ((journal_inum = es->s_journal_inum)) {
 		if (use_sb) {
 			if (es->s_jnl_backup_type != EXT3_JNL_BACKUP_BLOCKS) {
 				com_err(argv[0], 0,
 					"no journal backup in super block\n");
-				goto cleanup;
+				goto errout;
 			}
 			memset(&journal_inode, 0, sizeof(struct ext2_inode));
 			memcpy(&journal_inode.i_block[0], es->s_jnl_blocks,
@@ -235,14 +226,14 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		} else {
 			if (debugfs_read_inode(journal_inum, &journal_inode,
 					       argv[0]))
-				goto cleanup;
+				goto errout;
 		}
 
 		retval = ext2fs_file_open2(current_fs, journal_inum,
 					   &journal_inode, 0, &journal_file);
 		if (retval) {
 			com_err(argv[0], retval, "while opening ext2 file");
-			goto cleanup;
+			goto errout;
 		}
 		journal_source.where = JOURNAL_IS_INTERNAL;
 		journal_source.file = journal_file;
@@ -255,14 +246,14 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 				journal_fn = blkid_devno_to_devname(es->s_journal_dev);
 		if (!journal_fn) {
 			com_err(argv[0], 0, "filesystem has no journal");
-			goto cleanup;
+			goto errout;
 		}
 		journal_fd = open(journal_fn, O_RDONLY, 0);
 		if (journal_fd < 0) {
 			com_err(argv[0], errno, "while opening %s for logdump",
 				journal_fn);
 			free(journal_fn);
-			goto cleanup;
+			goto errout;
 		}
 		fprintf(out_file, "Using external journal found at %s\n",
 			journal_fn);
@@ -270,12 +261,15 @@ void do_logdump(int argc, char **argv, int sci_idx EXT2FS_ATTR((unused)),
 		journal_source.where = JOURNAL_IS_EXTERNAL;
 		journal_source.fd = journal_fd;
 	}
+
 	dump_journal(argv[0], out_file, &journal_source);
-cleanup:
-	if (journal_fd >= 0)
-		close(journal_fd);
-	if (journal_file)
+
+	if (journal_source.where == JOURNAL_IS_INTERNAL)
 		ext2fs_file_close(journal_file);
+	else
+		close(journal_fd);
+
+errout:
 	if (out_file && (out_file != stdout))
 		fclose(out_file);
 
@@ -331,15 +325,15 @@ static int read_journal_block(const char *cmd, struct journal_source *source,
 static const char *type_to_name(int btype)
 {
 	switch (btype) {
-	case JBD2_DESCRIPTOR_BLOCK:
+	case JFS_DESCRIPTOR_BLOCK:
 		return "descriptor block";
-	case JBD2_COMMIT_BLOCK:
+	case JFS_COMMIT_BLOCK:
 		return "commit block";
-	case JBD2_SUPERBLOCK_V1:
+	case JFS_SUPERBLOCK_V1:
 		return "V1 superblock";
-	case JBD2_SUPERBLOCK_V2:
+	case JFS_SUPERBLOCK_V2:
 		return "V2 superblock";
-	case JBD2_REVOKE_BLOCK:
+	case JFS_REVOKE_BLOCK:
 		return "revoke table";
 	}
 	return "unrecognised type";
@@ -351,7 +345,7 @@ static void dump_journal(char *cmdname, FILE *out_file,
 {
 	struct ext2_super_block *sb;
 	char			jsb_buffer[1024];
-	char			buf[EXT2_MAX_BLOCK_SIZE];
+	char			buf[8192];
 	journal_superblock_t	*jsb;
 	unsigned int		blocksize = 1024;
 	int			retval;
@@ -359,9 +353,6 @@ static void dump_journal(char *cmdname, FILE *out_file,
 	journal_header_t	*header;
 	tid_t			transaction;
 	unsigned int		blocknr = 0;
-	int			fc_done;
-	__u64			total_len;
-	__u32			maxlen;
 
 	/* First, check to see if there's an ext2 superblock header */
 	retval = read_journal_block(cmdname, source, 0, buf, 2048);
@@ -375,7 +366,7 @@ static void dump_journal(char *cmdname, FILE *out_file,
 		ext2fs_swap_super(sb);
 #endif
 
-	if ((be32_to_cpu(jsb->s_header.h_magic) != JBD2_MAGIC_NUMBER) &&
+	if ((be32_to_cpu(jsb->s_header.h_magic) != JFS_MAGIC_NUMBER) &&
 	    (sb->s_magic == EXT2_SUPER_MAGIC) &&
 	    ext2fs_has_feature_journal_dev(sb)) {
 		blocksize = EXT2_BLOCK_SIZE(sb);
@@ -404,41 +395,14 @@ static void dump_journal(char *cmdname, FILE *out_file,
 	}
 
 	jsb = (journal_superblock_t *) jsb_buffer;
-	if (be32_to_cpu(jsb->s_header.h_magic) != JBD2_MAGIC_NUMBER) {
+	if (be32_to_cpu(jsb->s_header.h_magic) != JFS_MAGIC_NUMBER) {
 		fprintf(out_file,
 			"Journal superblock magic number invalid!\n");
 		return;
 	}
 	blocksize = be32_to_cpu(jsb->s_blocksize);
-	if ((current_fs && (blocksize != current_fs->blocksize)) ||
-	    (!current_fs && (!blocksize || (blocksize & (blocksize - 1)) ||
-			     (blocksize > EXT2_MAX_BLOCK_SIZE)))) {
-		fprintf(out_file,
-			"Journal block size invalid: %u (%u)\n",
-			be32_to_cpu(jsb->s_blocksize), blocksize);
-		return;
-	}
 	transaction = be32_to_cpu(jsb->s_sequence);
 	blocknr = be32_to_cpu(jsb->s_start);
-	if (source->where == JOURNAL_IS_INTERNAL) {
-		retval = ext2fs_file_get_lsize(source->file, &total_len);
-		if (retval) {
-		stat_err:
-			com_err("dump_journal", retval,
-				"while getting journal inode size");
-			return;
-		}
-		total_len /= blocksize;
-	} else {
-			struct stat st;
-
-			if (fstat(source->fd, &st) < 0)
-				goto stat_err;
-			total_len = st.st_size / blocksize;
-	}
-	maxlen = be32_to_cpu(jsb->s_maxlen);
-	if (maxlen > total_len)
-		maxlen = total_len;
 
 	fprintf(out_file, "Journal starts at block %u, transaction %u\n",
 		blocknr, transaction);
@@ -446,7 +410,7 @@ static void dump_journal(char *cmdname, FILE *out_file,
 	if (!blocknr) {
 		/* Empty journal, nothing to do. */
 		if (!dump_old)
-			goto fc;
+			return;
 		else
 			blocknr = 1;
 	}
@@ -456,7 +420,7 @@ static void dump_journal(char *cmdname, FILE *out_file,
 				((ext2_loff_t) blocknr) * blocksize,
 				buf, blocksize);
 		if (retval)
-			break;
+			return;
 
 		header = (journal_header_t *) buf;
 
@@ -464,10 +428,10 @@ static void dump_journal(char *cmdname, FILE *out_file,
 		sequence = be32_to_cpu(header->h_sequence);
 		blocktype = be32_to_cpu(header->h_blocktype);
 
-		if (magic != JBD2_MAGIC_NUMBER) {
+		if (magic != JFS_MAGIC_NUMBER) {
 			fprintf (out_file, "No magic number at block %u: "
 				 "end of journal.\n", blocknr);
-			break;
+			return;
 		}
 
 		if (sequence != transaction) {
@@ -475,7 +439,7 @@ static void dump_journal(char *cmdname, FILE *out_file,
 				 "block %u: end of journal.\n",
 				 sequence, transaction, blocknr);
 			if (!dump_old)
-				break;
+				return;
 		}
 
 		if (dump_descriptors) {
@@ -486,47 +450,31 @@ static void dump_journal(char *cmdname, FILE *out_file,
 		}
 
 		switch (blocktype) {
-		case JBD2_DESCRIPTOR_BLOCK:
+		case JFS_DESCRIPTOR_BLOCK:
 			dump_descriptor_block(out_file, source, buf, jsb,
-					      &blocknr, blocksize, maxlen,
+					      &blocknr, blocksize,
 					      transaction);
 			continue;
 
-		case JBD2_COMMIT_BLOCK:
+		case JFS_COMMIT_BLOCK:
 			transaction++;
 			blocknr++;
-			WRAP(jsb, blocknr, maxlen);
+			WRAP(jsb, blocknr);
 			continue;
 
-		case JBD2_REVOKE_BLOCK:
+		case JFS_REVOKE_BLOCK:
 			dump_revoke_block(out_file, buf, jsb,
 					  blocknr, blocksize,
 					  transaction);
 			blocknr++;
-			WRAP(jsb, blocknr, maxlen);
+			WRAP(jsb, blocknr);
 			continue;
 
 		default:
 			fprintf (out_file, "Unexpected block type %u at "
 				 "block %u.\n", blocktype, blocknr);
-			break;
-		}
-	}
-
-fc:
-	blocknr = maxlen - jbd2_journal_get_num_fc_blks(jsb) + 1;
-	while (blocknr <= maxlen) {
-		retval = read_journal_block(cmdname, source,
-				((ext2_loff_t) blocknr) * blocksize,
-				buf, blocksize);
-		if (retval)
 			return;
-
-		dump_fc_block(out_file, buf, blocksize, transaction, &fc_done,
-			dump_old);
-		if (!dump_old && fc_done)
-			break;
-		blocknr++;
+		}
 	}
 }
 
@@ -534,109 +482,18 @@ static inline size_t journal_super_tag_bytes(journal_superblock_t *jsb)
 {
 	size_t sz;
 
-	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JBD2_FEATURE_INCOMPAT_CSUM_V3))
+	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JFS_FEATURE_INCOMPAT_CSUM_V3))
 		return sizeof(journal_block_tag3_t);
 
 	sz = sizeof(journal_block_tag_t);
 
-	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JBD2_FEATURE_INCOMPAT_CSUM_V2))
+	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JFS_FEATURE_INCOMPAT_CSUM_V2))
 		sz += sizeof(__u16);
 
-	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JBD2_FEATURE_INCOMPAT_64BIT))
+	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JFS_FEATURE_INCOMPAT_64BIT))
 		return sz;
 
 	return sz - sizeof(__u32);
-}
-
-static void dump_fc_block(FILE *out_file, char *buf, int blocksize,
-	int transaction, int *fc_done, int dump_old)
-{
-	struct ext4_fc_tl	*tl;
-	struct ext4_fc_head	*head;
-	struct ext4_fc_add_range	*add_range;
-	struct ext4_fc_del_range	*del_range;
-	struct ext4_fc_dentry_info	*dentry_info;
-	struct ext4_fc_tail		*tail;
-	struct ext3_extent	*ex;
-
-	*fc_done = 0;
-	fc_for_each_tl(buf, buf + blocksize, tl) {
-		switch (le16_to_cpu(tl->fc_tag)) {
-		case EXT4_FC_TAG_ADD_RANGE:
-			add_range =
-				(struct ext4_fc_add_range *)ext4_fc_tag_val(tl);
-			ex = (struct ext3_extent *)add_range->fc_ex;
-			fprintf(out_file,
-				"tag %s, inode %d, lblk %u, pblk %llu, len %lu\n",
-				tag2str(tl->fc_tag),
-				le32_to_cpu(add_range->fc_ino),
-				le32_to_cpu(ex->ee_block),
-				le32_to_cpu(ex->ee_start) +
-				(((unsigned long long) le16_to_cpu(ex->ee_start_hi)) << 32),
-				le16_to_cpu(ex->ee_len) > EXT_INIT_MAX_LEN ?
-				le16_to_cpu(ex->ee_len) - EXT_INIT_MAX_LEN :
-				le16_to_cpu(ex->ee_len));
-			break;
-		case EXT4_FC_TAG_DEL_RANGE:
-			del_range =
-				(struct ext4_fc_del_range *)ext4_fc_tag_val(tl);
-			fprintf(out_file, "tag %s, inode %d, lblk %d, len %d\n",
-				tag2str(tl->fc_tag),
-				le32_to_cpu(del_range->fc_ino),
-				le32_to_cpu(del_range->fc_lblk),
-				le32_to_cpu(del_range->fc_len));
-			break;
-		case EXT4_FC_TAG_LINK:
-		case EXT4_FC_TAG_UNLINK:
-		case EXT4_FC_TAG_CREAT:
-			dentry_info =
-				(struct ext4_fc_dentry_info *)
-					ext4_fc_tag_val(tl);
-			fprintf(out_file,
-				"tag %s, parent %d, ino %d, name \"%s\"\n",
-				tag2str(tl->fc_tag),
-				le32_to_cpu(dentry_info->fc_parent_ino),
-				le32_to_cpu(dentry_info->fc_ino),
-				dentry_info->fc_dname);
-			break;
-		case EXT4_FC_TAG_INODE:
-			fprintf(out_file, "tag %s, inode %d\n",
-				tag2str(tl->fc_tag),
-				le32_to_cpu(((struct ext4_fc_inode *)
-					ext4_fc_tag_val(tl))->fc_ino));
-			break;
-		case EXT4_FC_TAG_PAD:
-			fprintf(out_file, "tag %s\n", tag2str(tl->fc_tag));
-			break;
-		case EXT4_FC_TAG_TAIL:
-			tail = (struct ext4_fc_tail *)ext4_fc_tag_val(tl);
-			fprintf(out_file, "tag %s, tid %d\n",
-				tag2str(tl->fc_tag),
-				le32_to_cpu(tail->fc_tid));
-			if (!dump_old &&
-				le32_to_cpu(tail->fc_tid) < transaction) {
-				*fc_done = 1;
-				return;
-			}
-			break;
-		case EXT4_FC_TAG_HEAD:
-			fprintf(out_file, "\n*** Fast Commit Area ***\n");
-			head = (struct ext4_fc_head *)ext4_fc_tag_val(tl);
-			fprintf(out_file, "tag %s, features 0x%x, tid %d\n",
-				tag2str(tl->fc_tag),
-				le32_to_cpu(head->fc_features),
-				le32_to_cpu(head->fc_tid));
-			if (!dump_old &&
-				le32_to_cpu(head->fc_tid) < transaction) {
-				*fc_done = 1;
-				return;
-			}
-			break;
-		default:
-			*fc_done = 1;
-			break;
-		}
-	}
 }
 
 static void dump_descriptor_block(FILE *out_file,
@@ -644,7 +501,6 @@ static void dump_descriptor_block(FILE *out_file,
 				  char *buf,
 				  journal_superblock_t *jsb,
 				  unsigned int *blockp, int blocksize,
-				  __u32 maxlen,
 				  tid_t transaction)
 {
 	int			offset, tag_size, csum_size = 0;
@@ -658,16 +514,16 @@ static void dump_descriptor_block(FILE *out_file,
 	offset = sizeof(journal_header_t);
 	blocknr = *blockp;
 
-	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JBD2_FEATURE_INCOMPAT_CSUM_V3) ||
-	    JSB_HAS_INCOMPAT_FEATURE(jsb, JBD2_FEATURE_INCOMPAT_CSUM_V2))
-		csum_size = sizeof(struct jbd2_journal_block_tail);
+	if (JSB_HAS_INCOMPAT_FEATURE(jsb, JFS_FEATURE_INCOMPAT_CSUM_V3) ||
+	    JSB_HAS_INCOMPAT_FEATURE(jsb, JFS_FEATURE_INCOMPAT_CSUM_V2))
+		csum_size = sizeof(struct journal_block_tail);
 
 	if (dump_all)
 		fprintf(out_file, "Dumping descriptor block, sequence %u, at "
 			"block %u:\n", transaction, blocknr);
 
 	++blocknr;
-	WRAP(jsb, blocknr, maxlen);
+	WRAP(jsb, blocknr);
 
 	do {
 		/* Work out the location of the current tag, and skip to
@@ -684,7 +540,7 @@ static void dump_descriptor_block(FILE *out_file,
 		tag_block = be32_to_cpu(tag->t_blocknr);
 		tag_flags = be16_to_cpu(tag->t_flags);
 
-		if (!(tag_flags & JBD2_FLAG_SAME_UUID))
+		if (!(tag_flags & JFS_FLAG_SAME_UUID))
 			offset += 16;
 
 		dump_metadata_block(out_file, source, jsb,
@@ -692,9 +548,9 @@ static void dump_descriptor_block(FILE *out_file,
 				    transaction);
 
 		++blocknr;
-		WRAP(jsb, blocknr, maxlen);
+		WRAP(jsb, blocknr);
 
-	} while (!(tag_flags & JBD2_FLAG_LAST_TAG));
+	} while (!(tag_flags & JFS_FLAG_LAST_TAG));
 
 	*blockp = blocknr;
 }
@@ -707,7 +563,7 @@ static void dump_revoke_block(FILE *out_file, char *buf,
 			      tid_t transaction)
 {
 	int			offset, max;
-	jbd2_journal_revoke_header_t *header;
+	journal_revoke_header_t *header;
 	unsigned long long	rblock;
 	int			tag_size = sizeof(__u32);
 
@@ -715,17 +571,12 @@ static void dump_revoke_block(FILE *out_file, char *buf,
 		fprintf(out_file, "Dumping revoke block, sequence %u, at "
 			"block %u:\n", transaction, blocknr);
 
-	if (be32_to_cpu(jsb->s_feature_incompat) & JBD2_FEATURE_INCOMPAT_64BIT)
+	if (be32_to_cpu(jsb->s_feature_incompat) & JFS_FEATURE_INCOMPAT_64BIT)
 		tag_size = sizeof(__u64);
 
-	header = (jbd2_journal_revoke_header_t *) buf;
-	offset = sizeof(jbd2_journal_revoke_header_t);
+	header = (journal_revoke_header_t *) buf;
+	offset = sizeof(journal_revoke_header_t);
 	max = be32_to_cpu(header->r_count);
-	if (max > jsb->s_blocksize) {
-		fprintf(out_file, "Revoke block's r_count invalid: %u\b",
-			max);
-		max = jsb->s_blocksize;
-	}
 
 	while (offset < max) {
 		if (tag_size == sizeof(__u32)) {
@@ -736,8 +587,7 @@ static void dump_revoke_block(FILE *out_file, char *buf,
 			rblock = ext2fs_be64_to_cpu(*entry);
 		}
 		if (dump_all || rblock == block_to_dump) {
-			fprintf(out_file, "  Revoke FS block %llu",
-				(unsigned long long) rblock);
+			fprintf(out_file, "  Revoke FS block %llu", rblock);
 			if (dump_all)
 				fprintf(out_file, "\n");
 			else
@@ -773,7 +623,7 @@ static void dump_metadata_block(FILE *out_file, struct journal_source *source,
 				tid_t transaction)
 {
 	int		retval;
-	char 		buf[EXT2_MAX_BLOCK_SIZE];
+	char 		buf[8192];
 
 	if (!(dump_all
 	      || (fs_blocknr == block_to_dump)
@@ -821,7 +671,7 @@ static void dump_metadata_block(FILE *out_file, struct journal_source *source,
 
 		fprintf(out_file, "    (block bitmap for block %llu: "
 			"block is %s)\n",
-			(unsigned long long) block_to_dump,
+			block_to_dump,
 			ext2fs_test_bit(offset, buf) ? "SET" : "CLEAR");
 	}
 

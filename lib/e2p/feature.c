@@ -45,8 +45,6 @@ static struct feature feature_list[] = {
 			"snapshot_bitmap" },
 	{	E2P_FEATURE_COMPAT, EXT4_FEATURE_COMPAT_SPARSE_SUPER2,
 			"sparse_super2" },
-	{	E2P_FEATURE_COMPAT, EXT4_FEATURE_COMPAT_FAST_COMMIT,
-			"fast_commit" },
 	{	E2P_FEATURE_COMPAT, EXT4_FEATURE_COMPAT_STABLE_INODES,
 			"stable_inodes" },
 
@@ -121,36 +119,33 @@ static struct feature feature_list[] = {
 };
 
 static struct feature jrnl_feature_list[] = {
-       {       E2P_FEATURE_COMPAT, JBD2_FEATURE_COMPAT_CHECKSUM,
+       {       E2P_FEATURE_COMPAT, JFS_FEATURE_COMPAT_CHECKSUM,
                        "journal_checksum" },
 
-       {       E2P_FEATURE_INCOMPAT, JBD2_FEATURE_INCOMPAT_REVOKE,
+       {       E2P_FEATURE_INCOMPAT, JFS_FEATURE_INCOMPAT_REVOKE,
                        "journal_incompat_revoke" },
-       {       E2P_FEATURE_INCOMPAT, JBD2_FEATURE_INCOMPAT_64BIT,
+       {       E2P_FEATURE_INCOMPAT, JFS_FEATURE_INCOMPAT_64BIT,
                        "journal_64bit" },
-       {       E2P_FEATURE_INCOMPAT, JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT,
+       {       E2P_FEATURE_INCOMPAT, JFS_FEATURE_INCOMPAT_ASYNC_COMMIT,
                        "journal_async_commit" },
-       {       E2P_FEATURE_INCOMPAT, JBD2_FEATURE_INCOMPAT_CSUM_V2,
+       {       E2P_FEATURE_INCOMPAT, JFS_FEATURE_INCOMPAT_CSUM_V2,
                        "journal_checksum_v2" },
-       {       E2P_FEATURE_INCOMPAT, JBD2_FEATURE_INCOMPAT_CSUM_V3,
+       {       E2P_FEATURE_INCOMPAT, JFS_FEATURE_INCOMPAT_CSUM_V3,
                        "journal_checksum_v3" },
        {       0, 0, 0 },
 };
 
-void e2p_feature_to_string(int compat, unsigned int mask, char *buf,
-                           size_t buf_len)
+const char *e2p_feature2string(int compat, unsigned int mask)
 {
 	struct feature  *f;
+	static char buf[20];
 	char	fchar;
 	int	fnum;
 
 	for (f = feature_list; f->string; f++) {
 		if ((compat == f->compat) &&
-		    (mask == f->mask)) {
-			strncpy(buf, f->string, buf_len);
-			buf[buf_len - 1] = 0;
-			return;
-		}
+		    (mask == f->mask))
+			return f->string;
 	}
 	switch (compat) {
 	case  E2P_FEATURE_COMPAT:
@@ -168,13 +163,6 @@ void e2p_feature_to_string(int compat, unsigned int mask, char *buf,
 	}
 	for (fnum = 0; mask >>= 1; fnum++);
 	sprintf(buf, "FEATURE_%c%d", fchar, fnum);
-}
-
-const char *e2p_feature2string(int compat, unsigned int mask)
-{
-	static char buf[20];
-
-	e2p_feature_to_string(compat, mask, buf, sizeof(buf) / sizeof(buf[0]));
 	return buf;
 }
 

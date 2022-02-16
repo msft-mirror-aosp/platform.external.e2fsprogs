@@ -59,7 +59,7 @@ static journal_t *current_journal = NULL;
 static void journal_dump_trans(journal_transaction_t *trans EXT2FS_ATTR((unused)),
 			       const char *tag EXT2FS_ATTR((unused)))
 {
-	dbg_printf("TRANS %p(%s): tid=%u start=%llu block=%llu end=%llu "
+	dbg_printf("TRANS %p(%s): tid=%d start=%llu block=%llu end=%llu "
 		   "flags=0x%x\n", trans, tag, trans->tid, trans->start,
 		   trans->block, trans->end, trans->flags);
 }
@@ -85,10 +85,10 @@ static errcode_t journal_commit_trans(journal_transaction_t *trans)
 
 	/* write the descriptor block header */
 	commit = (struct commit_header *)bh->b_data;
-	commit->h_magic = ext2fs_cpu_to_be32(JBD2_MAGIC_NUMBER);
-	commit->h_blocktype = ext2fs_cpu_to_be32(JBD2_COMMIT_BLOCK);
+	commit->h_magic = ext2fs_cpu_to_be32(JFS_MAGIC_NUMBER);
+	commit->h_blocktype = ext2fs_cpu_to_be32(JFS_COMMIT_BLOCK);
 	commit->h_sequence = ext2fs_cpu_to_be32(trans->tid);
-	if (jbd2_has_feature_checksum(trans->journal)) {
+	if (jfs_has_feature_checksum(trans->journal)) {
 		__u32 csum_v1 = ~0;
 		blk64_t cblk;
 
@@ -100,12 +100,12 @@ static errcode_t journal_commit_trans(journal_transaction_t *trans)
 		}
 
 		for (cblk = trans->start; cblk < trans->block; cblk++) {
-			err = jbd2_journal_bmap(trans->journal, cblk,
-						&cbh->b_blocknr);
+			err = journal_bmap(trans->journal, cblk,
+					   &cbh->b_blocknr);
 			if (err)
 				goto error;
 			mark_buffer_uptodate(cbh, 0);
-			ll_rw_block(REQ_OP_READ, 0, 1, &cbh);
+			ll_rw_block(READ, 1, &cbh);
 			err = cbh->b_err;
 			if (err)
 				goto error;
@@ -114,8 +114,8 @@ static errcode_t journal_commit_trans(journal_transaction_t *trans)
 					cbh->b_size);
 		}
 
-		commit->h_chksum_type = JBD2_CRC32_CHKSUM;
-		commit->h_chksum_size = JBD2_CRC32_CHKSUM_SIZE;
+		commit->h_chksum_type = JFS_CRC32_CHKSUM;
+		commit->h_chksum_size = JFS_CRC32_CHKSUM_SIZE;
 		commit->h_chksum[0] = ext2fs_cpu_to_be32(csum_v1);
 	} else {
 		commit->h_chksum_type = 0;
@@ -133,14 +133,14 @@ static errcode_t journal_commit_trans(journal_transaction_t *trans)
 
 	/* Write block */
 	jbd2_commit_block_csum_set(trans->journal, bh);
-	err = jbd2_journal_bmap(trans->journal, trans->block, &bh->b_blocknr);
+	err = journal_bmap(trans->journal, trans->block, &bh->b_blocknr);
 	if (err)
 		goto error;
 
 	dbg_printf("Writing commit block at %llu:%llu\n", trans->block,
 		   bh->b_blocknr);
 	mark_buffer_dirty(bh);
-	ll_rw_block(REQ_OP_WRITE, 0, 1, &bh);
+	ll_rw_block(WRITE, 1, &bh);
 	err = bh->b_err;
 	if (err)
 		goto error;
@@ -161,7 +161,7 @@ static errcode_t journal_add_revoke_to_trans(journal_transaction_t *trans,
 					     blk64_t *revoke_list,
 					     size_t revoke_len)
 {
-	jbd2_journal_revoke_header_t *jrb;
+	journal_revoke_header_t *jrb;
 	void *buf;
 	size_t i, offset;
 	blk64_t curr_blk;
@@ -180,8 +180,8 @@ static errcode_t journal_add_revoke_to_trans(journal_transaction_t *trans,
 		return 0;
 
 	/* Do we need to leave space at the end for a checksum? */
-	if (jbd2_journal_has_csum_v2or3(trans->journal))
-		csum_size = sizeof(struct jbd2_journal_block_tail);
+	if (journal_has_csum_v2or3(trans->journal))
+		csum_size = sizeof(struct journal_revoke_tail);
 
 	curr_blk = trans->block;
 
@@ -190,12 +190,12 @@ static errcode_t journal_add_revoke_to_trans(journal_transaction_t *trans,
 	if (bh == NULL)
 		return ENOMEM;
 	jrb = buf = bh->b_data;
-	jrb->r_header.h_magic = ext2fs_cpu_to_be32(JBD2_MAGIC_NUMBER);
-	jrb->r_header.h_blocktype = ext2fs_cpu_to_be32(JBD2_REVOKE_BLOCK);
+	jrb->r_header.h_magic = ext2fs_cpu_to_be32(JFS_MAGIC_NUMBER);
+	jrb->r_header.h_blocktype = ext2fs_cpu_to_be32(JFS_REVOKE_BLOCK);
 	jrb->r_header.h_sequence = ext2fs_cpu_to_be32(trans->tid);
 	offset = sizeof(*jrb);
 
-	if (jbd2_has_feature_64bit(trans->journal))
+	if (jfs_has_feature_64bit(trans->journal))
 		sz = 8;
 	else
 		sz = 4;
@@ -206,14 +206,14 @@ static errcode_t journal_add_revoke_to_trans(journal_transaction_t *trans,
 			jrb->r_count = ext2fs_cpu_to_be32(offset);
 			jbd2_revoke_csum_set(trans->journal, bh);
 
-			err = jbd2_journal_bmap(trans->journal, curr_blk,
-						&bh->b_blocknr);
+			err = journal_bmap(trans->journal, curr_blk,
+					   &bh->b_blocknr);
 			if (err)
 				goto error;
 			dbg_printf("Writing revoke block at %llu:%llu\n",
 				   curr_blk, bh->b_blocknr);
 			mark_buffer_dirty(bh);
-			ll_rw_block(REQ_OP_WRITE, 0, 1, &bh);
+			ll_rw_block(WRITE, 1, &bh);
 			err = bh->b_err;
 			if (err)
 				goto error;
@@ -228,7 +228,7 @@ static errcode_t journal_add_revoke_to_trans(journal_transaction_t *trans,
 			goto error;
 		}
 
-		if (jbd2_has_feature_64bit(trans->journal))
+		if (jfs_has_feature_64bit(trans->journal))
 			*((__u64 *)(&((char *)buf)[offset])) =
 				ext2fs_cpu_to_be64(revoke_list[i]);
 		else
@@ -241,14 +241,13 @@ static errcode_t journal_add_revoke_to_trans(journal_transaction_t *trans,
 		jrb->r_count = ext2fs_cpu_to_be32(offset);
 		jbd2_revoke_csum_set(trans->journal, bh);
 
-		err = jbd2_journal_bmap(trans->journal, curr_blk,
-					&bh->b_blocknr);
+		err = journal_bmap(trans->journal, curr_blk, &bh->b_blocknr);
 		if (err)
 			goto error;
 		dbg_printf("Writing revoke block at %llu:%llu\n",
 			   curr_blk, bh->b_blocknr);
 		mark_buffer_dirty(bh);
-		ll_rw_block(REQ_OP_WRITE, 0, 1, &bh);
+		ll_rw_block(WRITE, 1, &bh);
 		err = bh->b_err;
 		if (err)
 			goto error;
@@ -285,8 +284,8 @@ static errcode_t journal_add_blocks_to_trans(journal_transaction_t *trans,
 		return 0;
 
 	/* Do we need to leave space at the end for a checksum? */
-	if (jbd2_journal_has_csum_v2or3(trans->journal))
-		csum_size = sizeof(struct jbd2_journal_block_tail);
+	if (journal_has_csum_v2or3(trans->journal))
+		csum_size = sizeof(struct journal_block_tail);
 
 	curr_blk = jdb_blk = trans->block;
 
@@ -304,8 +303,8 @@ static errcode_t journal_add_blocks_to_trans(journal_transaction_t *trans,
 		goto error;
 	}
 	jdb = jdb_buf = bh->b_data;
-	jdb->h_magic = ext2fs_cpu_to_be32(JBD2_MAGIC_NUMBER);
-	jdb->h_blocktype = ext2fs_cpu_to_be32(JBD2_DESCRIPTOR_BLOCK);
+	jdb->h_magic = ext2fs_cpu_to_be32(JFS_MAGIC_NUMBER);
+	jdb->h_blocktype = ext2fs_cpu_to_be32(JFS_DESCRIPTOR_BLOCK);
 	jdb->h_sequence = ext2fs_cpu_to_be32(trans->tid);
 	jdbt = (journal_block_tag_t *)(jdb + 1);
 
@@ -323,14 +322,14 @@ static errcode_t journal_add_blocks_to_trans(journal_transaction_t *trans,
 		if ((char *)jdbt + tag_bytes >
 		    (char *)jdb_buf + trans->journal->j_blocksize - csum_size) {
 			jbd2_descr_block_csum_set(trans->journal, bh);
-			err = jbd2_journal_bmap(trans->journal, jdb_blk,
+			err = journal_bmap(trans->journal, jdb_blk,
 					   &bh->b_blocknr);
 			if (err)
 				goto error;
 			dbg_printf("Writing descriptor block at %llu:%llu\n",
 				   jdb_blk, bh->b_blocknr);
 			mark_buffer_dirty(bh);
-			ll_rw_block(REQ_OP_WRITE, 0, 1, &bh);
+			ll_rw_block(WRITE, 1, &bh);
 			err = bh->b_err;
 			if (err)
 				goto error;
@@ -350,7 +349,7 @@ static errcode_t journal_add_blocks_to_trans(journal_transaction_t *trans,
 		jdbt->t_blocknr = ext2fs_cpu_to_be32(block_list[i] & 0xFFFFFFFF);
 		jdbt->t_flags = 0;
 		if (jdbt != (journal_block_tag_t *)(jdb + 1))
-			jdbt->t_flags |= ext2fs_cpu_to_be16(JBD2_FLAG_SAME_UUID);
+			jdbt->t_flags |= ext2fs_cpu_to_be16(JFS_FLAG_SAME_UUID);
 		else {
 			memcpy(jdbt + tag_bytes,
 			       trans->journal->j_superblock->s_uuid,
@@ -358,26 +357,26 @@ static errcode_t journal_add_blocks_to_trans(journal_transaction_t *trans,
 			tag_bytes += 16;
 		}
 		if (i == block_len - 1)
-			jdbt->t_flags |= ext2fs_cpu_to_be16(JBD2_FLAG_LAST_TAG);
-		if (*((__u32 *)buf) == ext2fs_cpu_to_be32(JBD2_MAGIC_NUMBER)) {
+			jdbt->t_flags |= ext2fs_cpu_to_be16(JFS_FLAG_LAST_TAG);
+		if (*((__u32 *)buf) == ext2fs_cpu_to_be32(JFS_MAGIC_NUMBER)) {
 			*((__u32 *)buf) = 0;
-			jdbt->t_flags |= ext2fs_cpu_to_be16(JBD2_FLAG_ESCAPE);
+			jdbt->t_flags |= ext2fs_cpu_to_be16(JFS_FLAG_ESCAPE);
 		}
-		if (jbd2_has_feature_64bit(trans->journal))
+		if (jfs_has_feature_64bit(trans->journal))
 			jdbt->t_blocknr_high = ext2fs_cpu_to_be32(block_list[i] >> 32);
 		jbd2_block_tag_csum_set(trans->journal, jdbt, data_bh,
 					trans->tid);
 
 		/* Write the data block */
-		err = jbd2_journal_bmap(trans->journal, curr_blk,
-					&data_bh->b_blocknr);
+		err = journal_bmap(trans->journal, curr_blk,
+				   &data_bh->b_blocknr);
 		if (err)
 			goto error;
 		dbg_printf("Writing data block %llu at %llu:%llu tag %d\n",
 			   block_list[i], curr_blk, data_bh->b_blocknr,
 			   tag_bytes);
 		mark_buffer_dirty(data_bh);
-		ll_rw_block(REQ_OP_WRITE, 0, 1, &data_bh);
+		ll_rw_block(WRITE, 1, &data_bh);
 		err = data_bh->b_err;
 		if (err)
 			goto error;
@@ -389,14 +388,13 @@ static errcode_t journal_add_blocks_to_trans(journal_transaction_t *trans,
 	/* Write out the last descriptor block */
 	if (jdbt != (journal_block_tag_t *)(jdb + 1)) {
 		jbd2_descr_block_csum_set(trans->journal, bh);
-		err = jbd2_journal_bmap(trans->journal, jdb_blk,
-					&bh->b_blocknr);
+		err = journal_bmap(trans->journal, jdb_blk, &bh->b_blocknr);
 		if (err)
 			goto error;
 		dbg_printf("Writing descriptor block at %llu:%llu\n",
 			   jdb_blk, bh->b_blocknr);
 		mark_buffer_dirty(bh);
-		ll_rw_block(REQ_OP_WRITE, 0, 1, &bh);
+		ll_rw_block(WRITE, 1, &bh);
 		err = bh->b_err;
 		if (err)
 			goto error;
@@ -418,15 +416,15 @@ static blk64_t journal_guess_blocks(journal_t *journal, blk64_t data_blocks,
 
 	/* Estimate # of revoke blocks */
 	bs = journal->j_blocksize;
-	if (jbd2_journal_has_csum_v2or3(journal))
-		bs -= sizeof(struct jbd2_journal_block_tail);
-	sz = jbd2_has_feature_64bit(journal) ? sizeof(__u64) : sizeof(__u32);
+	if (journal_has_csum_v2or3(journal))
+		bs -= sizeof(struct journal_revoke_tail);
+	sz = jfs_has_feature_64bit(journal) ? sizeof(__u64) : sizeof(__u32);
 	ret += revoke_blocks * sz / bs;
 
 	/* Estimate # of data blocks */
 	bs = journal->j_blocksize - 16;
-	if (jbd2_journal_has_csum_v2or3(journal))
-		bs -= sizeof(struct jbd2_journal_block_tail);
+	if (journal_has_csum_v2or3(journal))
+		bs -= sizeof(struct journal_block_tail);
 	sz = journal_tag_bytes(journal);
 	ret += data_blocks * sz / bs;
 
@@ -506,7 +504,7 @@ static errcode_t journal_write(journal_t *journal,
 	errcode_t err;
 
 	if (revoke_len > 0) {
-		jbd2_set_feature_revoke(journal);
+		jfs_set_feature_revoke(journal);
 		mark_buffer_dirty(journal->j_sb_buffer);
 	}
 
@@ -530,6 +528,8 @@ static errcode_t journal_write(journal_t *journal,
 	}
 
 	err = journal_close_trans(&trans);
+	if (err)
+		goto error;
 error:
 	return err;
 }
@@ -554,19 +554,15 @@ void do_journal_write(int argc, char *argv[], int sci_idx EXT2FS_ATTR((unused)),
 		switch (opt) {
 		case 'b':
 			err = read_list(optarg, &blist, &bn);
-			if (err) {
+			if (err)
 				com_err(argv[0], err,
 					"while reading block list");
-				goto out;
-			}
 			break;
 		case 'r':
 			err = read_list(optarg, &rlist, &rn);
-			if (err) {
+			if (err)
 				com_err(argv[0], err,
 					"while reading revoke list");
-				goto out;
-			}
 			break;
 		case 'c':
 			flags |= JOURNAL_WRITE_NO_COMMIT;
@@ -628,8 +624,8 @@ static int count_tags(journal_t *journal, char *buf)
 	int			nr = 0, size = journal->j_blocksize;
 	int			tag_bytes = journal_tag_bytes(journal);
 
-	if (jbd2_journal_has_csum_v2or3(journal))
-		size -= sizeof(struct jbd2_journal_block_tail);
+	if (journal_has_csum_v2or3(journal))
+		size -= sizeof(struct journal_block_tail);
 
 	tagp = buf + sizeof(journal_header_t);
 
@@ -638,10 +634,10 @@ static int count_tags(journal_t *journal, char *buf)
 
 		nr++;
 		tagp += tag_bytes;
-		if (!(tag->t_flags & ext2fs_cpu_to_be16(JBD2_FLAG_SAME_UUID)))
+		if (!(tag->t_flags & ext2fs_cpu_to_be16(JFS_FLAG_SAME_UUID)))
 			tagp += 16;
 
-		if (tag->t_flags & ext2fs_cpu_to_be16(JBD2_FLAG_LAST_TAG))
+		if (tag->t_flags & ext2fs_cpu_to_be16(JFS_FLAG_LAST_TAG))
 			break;
 	}
 
@@ -691,12 +687,11 @@ static errcode_t journal_find_head(journal_t *journal)
 		/* Skip over each chunk of the transaction looking
 		 * either the next descriptor block or the final commit
 		 * record. */
-		err = jbd2_journal_bmap(journal, next_log_block,
-					&bh->b_blocknr);
+		err = journal_bmap(journal, next_log_block, &bh->b_blocknr);
 		if (err)
 			goto err;
 		mark_buffer_uptodate(bh, 0);
-		ll_rw_block(REQ_OP_READ, 0, 1, &bh);
+		ll_rw_block(READ, 1, &bh);
 		err = bh->b_err;
 		if (err)
 			goto err;
@@ -712,7 +707,7 @@ static errcode_t journal_find_head(journal_t *journal)
 
 		tmp = (journal_header_t *)bh->b_data;
 
-		if (tmp->h_magic != ext2fs_cpu_to_be32(JBD2_MAGIC_NUMBER)) {
+		if (tmp->h_magic != ext2fs_cpu_to_be32(JFS_MAGIC_NUMBER)) {
 			dbg_printf("JBD2: wrong magic 0x%x\n", tmp->h_magic);
 			goto err;
 		}
@@ -733,17 +728,17 @@ static errcode_t journal_find_head(journal_t *journal)
 		 * to do with it?  That depends on the pass... */
 
 		switch (blocktype) {
-		case JBD2_DESCRIPTOR_BLOCK:
+		case JFS_DESCRIPTOR_BLOCK:
 			next_log_block += count_tags(journal, bh->b_data);
 			wrap(journal, next_log_block);
 			continue;
 
-		case JBD2_COMMIT_BLOCK:
+		case JFS_COMMIT_BLOCK:
 			head_block = next_log_block;
 			next_commit_ID++;
 			continue;
 
-		case JBD2_REVOKE_BLOCK:
+		case JFS_REVOKE_BLOCK:
 			continue;
 
 		default:
@@ -785,14 +780,14 @@ static void update_journal_csum(journal_t *journal, int ver)
 		printf("Setting csum v%d\n", ver);
 		switch (ver) {
 		case 2:
-			jbd2_clear_feature_csum3(journal);
-			jbd2_set_feature_csum2(journal);
-			jbd2_clear_feature_checksum(journal);
+			jfs_clear_feature_csum3(journal);
+			jfs_set_feature_csum2(journal);
+			jfs_clear_feature_checksum(journal);
 			break;
 		case 3:
-			jbd2_set_feature_csum3(journal);
-			jbd2_clear_feature_csum2(journal);
-			jbd2_clear_feature_checksum(journal);
+			jfs_set_feature_csum3(journal);
+			jfs_clear_feature_csum2(journal);
+			jfs_clear_feature_checksum(journal);
 			break;
 		default:
 			printf("Unknown checksum v%d\n", ver);
@@ -802,9 +797,9 @@ static void update_journal_csum(journal_t *journal, int ver)
 		journal->j_csum_seed = jbd2_chksum(journal, ~0, jsb->s_uuid,
 						   sizeof(jsb->s_uuid));
 	} else {
-		jbd2_clear_feature_csum3(journal);
-		jbd2_clear_feature_csum2(journal);
-		jbd2_set_feature_checksum(journal);
+		jfs_clear_feature_csum3(journal);
+		jfs_clear_feature_csum2(journal);
+		jfs_set_feature_checksum(journal);
 	}
 }
 
@@ -826,7 +821,7 @@ static void update_uuid(journal_t *journal)
 	if (!ext2fs_has_feature_64bit(fs->super))
 		return;
 
-	if (jbd2_has_feature_64bit(journal) &&
+	if (jfs_has_feature_64bit(journal) &&
 	    ext2fs_has_feature_64bit(fs->super))
 		return;
 
@@ -848,7 +843,7 @@ static void update_64bit_flag(journal_t *journal)
 	if (!ext2fs_has_feature_64bit(journal->j_fs_dev->k_fs->super))
 		return;
 
-	if (jbd2_has_feature_64bit(journal) &&
+	if (jfs_has_feature_64bit(journal) &&
 	    ext2fs_has_feature_64bit(journal->j_fs_dev->k_fs->super))
 		return;
 
@@ -859,7 +854,7 @@ static void update_64bit_flag(journal_t *journal)
 		return;
 	}
 
-	jbd2_set_feature_64bit(journal);
+	jfs_set_feature_64bit(journal);
 }
 
 void do_journal_open(int argc, char *argv[], int sci_idx EXT2FS_ATTR((unused)),
@@ -917,7 +912,7 @@ void do_journal_open(int argc, char *argv[], int sci_idx EXT2FS_ATTR((unused)),
 	}
 	journal = current_journal;
 
-	dbg_printf("JOURNAL: seq=%u tailseq=%u start=%lu first=%lu "
+	dbg_printf("JOURNAL: seq=%d tailseq=%d start=%lu first=%lu "
 		   "maxlen=%lu\n", journal->j_tail_sequence,
 		   journal->j_transaction_sequence, journal->j_tail,
 		   journal->j_first, journal->j_last);

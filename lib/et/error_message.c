@@ -113,11 +113,6 @@ gettextf set_com_err_gettext(gettextf new_proc)
     return x;
 }
 
-#ifdef __GNU__
-#define SYS_ERR_BASE 0x40000000
-#else
-#define SYS_ERR_BASE 0
-#endif
 
 const char * error_message (errcode_t code)
 {
@@ -129,14 +124,14 @@ const char * error_message (errcode_t code)
 
     offset = (int) (code & ((1<<ERRCODE_RANGE)-1));
     table_num = code - offset;
-    if (table_num == SYS_ERR_BASE) {
+    if (!table_num) {
 #ifdef HAS_SYS_ERRLIST
-	if (code < sys_nerr)
-	    return(sys_errlist[code]);
+	if (offset < sys_nerr)
+	    return(sys_errlist[offset]);
 	else
 	    goto oops;
 #else
-	cp = strerror(code);
+	cp = strerror(offset);
 	if (cp)
 	    return(cp);
 	else

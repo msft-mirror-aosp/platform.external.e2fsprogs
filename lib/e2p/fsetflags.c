@@ -48,14 +48,11 @@
 #undef HAVE_CHFLAGS
 #endif
 
-#ifndef O_LARGEFILE
-#define O_LARGEFILE 0
+#ifdef O_LARGEFILE
+#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK|O_LARGEFILE)
+#else
+#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK)
 #endif
-#ifndef O_NOFOLLOW
-#define O_NOFOLLOW 0
-#endif
-
-#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW)
 
 int fsetflags (const char * name, unsigned long flags)
 {
@@ -76,31 +73,35 @@ int fsetflags (const char * name, unsigned long flags)
 #endif
 
 	return chflags (name, bsd_flags);
-#elif APPLE_DARWIN && HAVE_EXT2_IOCTLS
-	int f = (int) flags;
-	return syscall(SYS_fsctl, name, EXT2_IOC_SETFLAGS, &f, 0);
-#elif HAVE_EXT2_IOCTLS
+#else /* !HAVE_CHFLAGS || (APPLE_DARWIN && HAVE_EXT2_IOCTLS) */
+#if HAVE_EXT2_IOCTLS
 	int fd, r, f, save_errno = 0;
+	struct stat buf;
 
-	fd = open(name, OPEN_FLAGS);
-	if (fd == -1) {
-		if (errno == ELOOP || errno == ENXIO)
-			errno = EOPNOTSUPP;
+	if (!lstat(name, &buf) &&
+	    !S_ISREG(buf.st_mode) && !S_ISDIR(buf.st_mode)) {
+		goto notsupp;
+	}
+#if !APPLE_DARWIN
+	fd = open (name, OPEN_FLAGS);
+	if (fd == -1)
 		return -1;
-	}
 	f = (int) flags;
-	r = ioctl(fd, EXT2_IOC_SETFLAGS, &f);
-	if (r == -1) {
-		if (errno == ENOTTY)
-			errno = EOPNOTSUPP;
+	r = ioctl (fd, EXT2_IOC_SETFLAGS, &f);
+	if (r == -1)
 		save_errno = errno;
-	}
-	close(fd);
+	close (fd);
 	if (save_errno)
 		errno = save_errno;
+#else /* APPLE_DARWIN */
+	f = (int) flags;
+	return syscall(SYS_fsctl, name, EXT2_IOC_SETFLAGS, &f, 0);
+#endif /* !APPLE_DARWIN */
 	return r;
-#else
+
+notsupp:
+#endif /* HAVE_EXT2_IOCTLS */
+#endif
 	errno = EOPNOTSUPP;
 	return -1;
-#endif
 }

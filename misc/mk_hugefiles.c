@@ -337,8 +337,7 @@ static errcode_t mk_hugefile(ext2_filsys fs, blk64_t num,
 			if (retval)
 				com_err(program_name, retval,
 					_("while zeroing block %llu "
-					  "for hugefile"),
-					(unsigned long long) ret_blk);
+					  "for hugefile"), ret_blk);
 		}
 
 		while (n) {
@@ -515,7 +514,7 @@ errcode_t mk_hugefiles(ext2_filsys fs, const char *device_name)
 			fprintf(stderr,
 				_("Partition offset of %llu (%uk) blocks "
 				  "not compatible with cluster size %u.\n"),
-				(unsigned long long) part_offset, fs->blocksize,
+				part_offset, fs->blocksize,
 				EXT2_CLUSTER_SIZE(fs->super));
 			exit(1);
 		}
@@ -584,8 +583,7 @@ errcode_t mk_hugefiles(ext2_filsys fs, const char *device_name)
 			printf("%s", _("Huge files will be zero'ed\n"));
 		printf(_("Creating %lu huge file(s) "), num_files);
 		if (num_blocks)
-			printf(_("with %llu blocks each"),
-			       (unsigned long long) num_blocks);
+			printf(_("with %llu blocks each"), num_blocks);
 		fputs(": ", stdout);
 	}
 	for (i=0; i < num_files; i++) {

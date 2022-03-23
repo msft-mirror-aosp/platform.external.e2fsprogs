@@ -129,10 +129,7 @@ errcode_t ext2fs_expand_dir(ext2_filsys fs, ext2_ino_t dir)
 	if (retval)
 		return retval;
 
-	retval = ext2fs_inode_size_set(fs, &inode,
-				       EXT2_I_SIZE(&inode) + fs->blocksize);
-	if (retval)
-		return retval;
+	inode.i_size += fs->blocksize;
 	ext2fs_iblk_add_blocks(fs, &inode, es.newblocks);
 
 	retval = ext2fs_write_inode(fs, dir, &inode);

@@ -93,7 +93,6 @@ static uid_t	root_uid;
 static gid_t	root_gid;
 int	journal_size;
 int	journal_flags;
-int	journal_fc_size;
 static int	lazy_itable_init;
 static int	packed_meta_blocks;
 int		no_copy_xattrs;
@@ -257,8 +256,7 @@ static void test_disk(ext2_filsys fs, badblocks_list *bb_list)
 
 	sprintf(buf, "badblocks -b %d -X %s%s%s %llu", fs->blocksize,
 		quiet ? "" : "-s ", (cflag > 1) ? "-w " : "",
-		fs->device_name,
-		(unsigned long long) ext2fs_blocks_count(fs->super)-1);
+		fs->device_name, ext2fs_blocks_count(fs->super)-1);
 	if (verbose)
 		printf(_("Running command: %s\n"), buf);
 	f = popen(buf, "r");
@@ -346,7 +344,7 @@ _("Warning: the backup superblock/group descriptors at block %u contain\n"
 		exit(1);
 	}
 	while (ext2fs_badblocks_list_iterate(bb_iter, &blk))
-		ext2fs_mark_block_bitmap2(fs->block_map, blk);
+		ext2fs_mark_block_bitmap2(fs->block_map, EXT2FS_B2C(fs, blk));
 	ext2fs_badblocks_list_iterate_end(bb_iter);
 }
 
@@ -443,8 +441,7 @@ static void write_inode_tables(ext2_filsys fs, int lazy_flag, int itable_zeroed)
 			if (retval) {
 				fprintf(stderr, _("\nCould not write %d "
 					  "blocks in inode table starting at %llu: %s\n"),
-					num, (unsigned long long) blk,
-					error_message(retval));
+					num, blk, error_message(retval));
 				exit(1);
 			}
 		}
@@ -607,16 +604,9 @@ static void create_journal_dev(ext2_filsys fs)
 	char			*buf;
 	blk64_t			blk, err_blk;
 	int			c, count, err_count;
-	struct ext2fs_journal_params	jparams;
 
-	retval = ext2fs_get_journal_params(&jparams, fs);
-	if (retval) {
-		com_err("create_journal_dev", retval, "%s",
-			_("while splitting the journal size"));
-		exit(1);
-	}
-
-	retval = ext2fs_create_journal_superblock2(fs, &jparams, 0, &buf);
+	retval = ext2fs_create_journal_superblock(fs,
+				  ext2fs_blocks_count(fs->super), 0, &buf);
 	if (retval) {
 		com_err("create_journal_dev", retval, "%s",
 			_("while initializing journal superblock"));
@@ -641,7 +631,7 @@ static void create_journal_dev(ext2_filsys fs)
 			com_err("create_journal_dev", retval,
 				_("while zeroing journal device "
 				  "(block %llu, count %d)"),
-				(unsigned long long) err_blk, err_count);
+				err_blk, err_count);
 			exit(1);
 		}
 		blk += c;
@@ -665,6 +655,7 @@ write_superblock:
 static void show_stats(ext2_filsys fs)
 {
 	struct ext2_super_block *s = fs->super;
+	char 			buf[80];
         char                    *os;
 	blk64_t			group_block;
 	dgrp_t			i;
@@ -673,18 +664,18 @@ static void show_stats(ext2_filsys fs)
 	if (!verbose) {
 		printf(_("Creating filesystem with %llu %dk blocks and "
 			 "%u inodes\n"),
-		       (unsigned long long) ext2fs_blocks_count(s),
-		       fs->blocksize >> 10, s->s_inodes_count);
+		       ext2fs_blocks_count(s), fs->blocksize >> 10,
+		       s->s_inodes_count);
 		goto skip_details;
 	}
 
 	if (ext2fs_blocks_count(&fs_param) != ext2fs_blocks_count(s))
 		fprintf(stderr, _("warning: %llu blocks unused.\n\n"),
-			(unsigned long long) (ext2fs_blocks_count(&fs_param) -
-					      ext2fs_blocks_count(s)));
+		       ext2fs_blocks_count(&fs_param) - ext2fs_blocks_count(s));
 
-	printf(_("Filesystem label=%.*s\n"), EXT2_LEN_STR(s->s_volume_name));
-
+	memset(buf, 0, sizeof(buf));
+	strncpy(buf, s->s_volume_name, sizeof(s->s_volume_name));
+	printf(_("Filesystem label=%s\n"), buf);
 	os = e2p_os2string(fs->super->s_creator_os);
 	if (os)
 		printf(_("OS type: %s\n"), os);
@@ -701,9 +692,9 @@ static void show_stats(ext2_filsys fs)
 	printf(_("Stride=%u blocks, Stripe width=%u blocks\n"),
 	       s->s_raid_stride, s->s_raid_stripe_width);
 	printf(_("%u inodes, %llu blocks\n"), s->s_inodes_count,
-	       (unsigned long long) ext2fs_blocks_count(s));
+	       ext2fs_blocks_count(s));
 	printf(_("%llu blocks (%2.2f%%) reserved for the super user\n"),
-	       (unsigned long long) ext2fs_r_blocks_count(s),
+		ext2fs_r_blocks_count(s),
 	       100.0 *  ext2fs_r_blocks_count(s) / ext2fs_blocks_count(s));
 	printf(_("First data block=%u\n"), s->s_first_data_block);
 	if (root_uid != 0 || root_gid != 0)
@@ -747,7 +738,7 @@ skip_details:
 			col_left = 72;
 		}
 		col_left -= need;
-		printf("%llu", (unsigned long long) group_block);
+		printf("%llu", group_block);
 	}
 	printf("\n\n");
 }
@@ -1153,7 +1144,6 @@ static __u32 ok_features[3] = {
 		EXT2_FEATURE_COMPAT_DIR_INDEX |
 		EXT2_FEATURE_COMPAT_EXT_ATTR |
 		EXT4_FEATURE_COMPAT_SPARSE_SUPER2 |
-		EXT4_FEATURE_COMPAT_FAST_COMMIT |
 		EXT4_FEATURE_COMPAT_STABLE_INODES,
 	/* Incompat */
 	EXT2_FEATURE_INCOMPAT_FILETYPE|
@@ -1479,29 +1469,22 @@ int get_bool_from_profile(char **types, const char *opt, int def_val)
 extern const char *mke2fs_default_profile;
 static const char *default_files[] = { "<default>", 0 };
 
-struct device_param {
-	unsigned long min_io;		/* prefered minimum IO size */
-	unsigned long opt_io;		/* optimal IO size */
-	unsigned long alignment_offset;	/* alignment offset wrt physical block size */
-	unsigned int dax:1;		/* supports dax? */
-};
-
 #ifdef HAVE_BLKID_PROBE_GET_TOPOLOGY
 /*
  * Sets the geometry of a device (stripe/stride), and returns the
  * device's alignment offset, if any, or a negative error.
  */
 static int get_device_geometry(const char *file,
-			       unsigned int blocksize,
-			       unsigned int psector_size,
-			       struct device_param *dev_param)
+			       struct ext2_super_block *param,
+			       unsigned int psector_size)
 {
 	int rc = -1;
+	unsigned int blocksize;
 	blkid_probe pr;
 	blkid_topology tp;
+	unsigned long min_io;
+	unsigned long opt_io;
 	struct stat statbuf;
-
-	memset(dev_param, 0, sizeof(*dev_param));
 
 	/* Nothing to do for a regular file */
 	if (!stat(file, &statbuf) && S_ISREG(statbuf.st_mode))
@@ -1515,20 +1498,23 @@ static int get_device_geometry(const char *file,
 	if (!tp)
 		goto out;
 
-	dev_param->min_io = blkid_topology_get_minimum_io_size(tp);
-	dev_param->opt_io = blkid_topology_get_optimal_io_size(tp);
-	if ((dev_param->min_io == 0) && (psector_size > blocksize))
-		dev_param->min_io = psector_size;
-	if ((dev_param->opt_io == 0) && dev_param->min_io > 0)
-		dev_param->opt_io = dev_param->min_io;
-	if ((dev_param->opt_io == 0) && (psector_size > blocksize))
-		dev_param->opt_io = psector_size;
+	min_io = blkid_topology_get_minimum_io_size(tp);
+	opt_io = blkid_topology_get_optimal_io_size(tp);
+	blocksize = EXT2_BLOCK_SIZE(param);
+	if ((min_io == 0) && (psector_size > blocksize))
+		min_io = psector_size;
+	if ((opt_io == 0) && min_io)
+		opt_io = min_io;
+	if ((opt_io == 0) && (psector_size > blocksize))
+		opt_io = psector_size;
 
-	dev_param->alignment_offset = blkid_topology_get_alignment_offset(tp);
-#ifdef HAVE_BLKID_TOPOLOGY_GET_DAX
-	dev_param->dax = blkid_topology_get_dax(tp);
-#endif
-	rc = 0;
+	/* setting stripe/stride to blocksize is pointless */
+	if (min_io > blocksize)
+		param->s_raid_stride = min_io / blocksize;
+	if (opt_io > blocksize)
+		param->s_raid_stripe_width = opt_io / blocksize;
+
+	rc = blkid_topology_get_alignment_offset(tp);
 out:
 	blkid_free_probe(pr);
 	return rc;
@@ -1577,9 +1563,6 @@ static void PRS(int argc, char *argv[])
 	int		use_bsize;
 	char		*newpath;
 	int		pathlen = sizeof(PATH_SET) + 1;
-#ifdef HAVE_BLKID_PROBE_GET_TOPOLOGY
-	struct device_param dev_param;
-#endif
 
 	if (oldpath)
 		pathlen += strlen(oldpath);
@@ -1766,8 +1749,6 @@ profile_error:
 		case 'j':
 			if (!journal_size)
 				journal_size = -1;
-			if (!journal_fc_size)
-				journal_fc_size = -1;
 			break;
 		case 'J':
 			parse_journal_opts(optarg);
@@ -1991,9 +1972,15 @@ profile_error:
 		dev_size = fs_blocks_count;
 		retval = 0;
 	} else
+#ifndef _WIN32
 		retval = ext2fs_get_device_size2(device_name,
 						 EXT2_BLOCK_SIZE(&fs_param),
 						 &dev_size);
+#else
+		retval = ext2fs_get_device_size(device_name,
+						EXT2_BLOCK_SIZE(&fs_param),
+						&dev_size);
+#endif
 	if (retval && (retval != EXT2_ET_UNIMPLEMENTED)) {
 		com_err(program_name, retval, "%s",
 			_("while trying to determine filesystem size"));
@@ -2191,8 +2178,8 @@ profile_error:
 		fprintf(stderr, _("%s: Size of device (0x%llx blocks) %s "
 				  "too big to be expressed\n\t"
 				  "in 32 bits using a blocksize of %d.\n"),
-			program_name, (unsigned long long) fs_blocks_count,
-			device_name, EXT2_BLOCK_SIZE(&fs_param));
+			program_name, fs_blocks_count, device_name,
+			EXT2_BLOCK_SIZE(&fs_param));
 		exit(1);
 	}
 	/*
@@ -2205,8 +2192,8 @@ profile_error:
 		fprintf(stderr, _("%s: Size of device (0x%llx blocks) %s "
 				  "too big to create\n\t"
 				  "a filesystem using a blocksize of %d.\n"),
-			program_name, (unsigned long long) fs_blocks_count,
-			device_name, EXT2_BLOCK_SIZE(&fs_param));
+			program_name, fs_blocks_count, device_name,
+			EXT2_BLOCK_SIZE(&fs_param));
 		exit(1);
 	}
 
@@ -2321,35 +2308,17 @@ profile_error:
 	}
 
 #ifdef HAVE_BLKID_PROBE_GET_TOPOLOGY
-	retval = get_device_geometry(device_name, blocksize,
-				     psector_size, &dev_param);
+	retval = get_device_geometry(device_name, &fs_param,
+				     (unsigned int) psector_size);
 	if (retval < 0) {
 		fprintf(stderr,
 			_("warning: Unable to get device geometry for %s\n"),
 			device_name);
-	} else {
-		/* setting stripe/stride to blocksize is pointless */
-		if (dev_param.min_io > blocksize)
-			fs_param.s_raid_stride = dev_param.min_io / blocksize;
-		if (dev_param.opt_io > blocksize) {
-			fs_param.s_raid_stripe_width =
-						dev_param.opt_io / blocksize;
-		}
-
-		if (dev_param.alignment_offset) {
-			printf(_("%s alignment is offset by %lu bytes.\n"),
-			       device_name, dev_param.alignment_offset);
-			printf(_("This may result in very poor performance, "
-				  "(re)-partitioning suggested.\n"));
-		}
-
-		if (dev_param.dax && blocksize != sys_page_size) {
-			fprintf(stderr,
-				_("%s is capable of DAX but current block size "
-				  "%u is different from system page size %u so "
-				  "filesystem will not support DAX.\n"),
-				device_name, blocksize, sys_page_size);
-		}
+	} else if (retval) {
+		printf(_("%s alignment is offset by %lu bytes.\n"),
+		       device_name, retval);
+		printf(_("This may result in very poor performance, "
+			  "(re)-partitioning suggested.\n"));
 	}
 #endif
 
@@ -2601,15 +2570,14 @@ profile_error:
 			else {
 				com_err(program_name, 0,
 					_("too many inodes (%llu), raise "
-					  "inode ratio?"),
-					(unsigned long long) n);
+					  "inode ratio?"), n);
 				exit(1);
 			}
 		}
 	} else if (num_inodes > MAX_32_NUM) {
 		com_err(program_name, 0,
 			_("too many inodes (%llu), specify < 2^32 inodes"),
-			(unsigned long long) num_inodes);
+			  num_inodes);
 		exit(1);
 	}
 	/*
@@ -2942,9 +2910,7 @@ int main (int argc, char *argv[])
 	errcode_t	retval = 0;
 	ext2_filsys	fs;
 	badblocks_list	bb_list = 0;
-	badblocks_iterate	bb_iter;
-	blk_t		blk;
-	struct ext2fs_journal_params	jparams = {0};
+	unsigned int	journal_blocks = 0;
 	unsigned int	i, checkinterval;
 	int		max_mnt_count;
 	int		val, hash_alg;
@@ -2954,7 +2920,6 @@ int main (int argc, char *argv[])
 	char		opt_string[40];
 	char		*hash_alg_str;
 	int		itable_zeroed = 0;
-	blk64_t		overhead;
 
 #ifdef ENABLE_NLS
 	setlocale(LC_MESSAGES, "");
@@ -3054,13 +3019,13 @@ int main (int argc, char *argv[])
 	/* Calculate journal blocks */
 	if (!journal_device && ((journal_size) ||
 	    ext2fs_has_feature_journal(&fs_param)))
-		figure_journal_size(&jparams, journal_size, journal_fc_size, fs);
+		journal_blocks = figure_journal_size(journal_size, fs);
 
 	sprintf(opt_string, "tdb_data_size=%d", fs->blocksize <= 4096 ?
 		32768 : fs->blocksize * 8);
 	io_channel_set_options(fs->io, opt_string);
 	if (offset) {
-		sprintf(opt_string, "offset=%llu", (unsigned long long) offset);
+		sprintf(opt_string, "offset=%llu", offset);
 		io_channel_set_options(fs->io, opt_string);
 	}
 
@@ -3186,7 +3151,7 @@ int main (int argc, char *argv[])
 	if (volume_label) {
 		memset(fs->super->s_volume_name, 0,
 		       sizeof(fs->super->s_volume_name));
-		strncpy((char *) fs->super->s_volume_name, volume_label,
+		strncpy(fs->super->s_volume_name, volume_label,
 			sizeof(fs->super->s_volume_name));
 	}
 
@@ -3196,7 +3161,7 @@ int main (int argc, char *argv[])
 	if (mount_dir) {
 		memset(fs->super->s_last_mounted, 0,
 		       sizeof(fs->super->s_last_mounted));
-		strncpy((char *) fs->super->s_last_mounted, mount_dir,
+		strncpy(fs->super->s_last_mounted, mount_dir,
 			sizeof(fs->super->s_last_mounted));
 	}
 
@@ -3246,50 +3211,11 @@ int main (int argc, char *argv[])
 	if (!quiet)
 		printf("%s", _("done                            \n"));
 
-	/*
-	 * Unmark bad blocks to calculate overhead, because metadata
-	 * blocks and bad blocks can land on the same allocation cluster.
-	 */
-	if (bb_list) {
-		retval = ext2fs_badblocks_list_iterate_begin(bb_list,
-							     &bb_iter);
-		if (retval) {
-			com_err("ext2fs_badblocks_list_iterate_begin", retval,
-				"%s", _("while unmarking bad blocks"));
-			exit(1);
-		}
-		while (ext2fs_badblocks_list_iterate(bb_iter, &blk))
-			ext2fs_unmark_block_bitmap2(fs->block_map, blk);
-		ext2fs_badblocks_list_iterate_end(bb_iter);
-	}
-
 	retval = ext2fs_convert_subcluster_bitmap(fs, &fs->block_map);
 	if (retval) {
 		com_err(program_name, retval, "%s",
 			_("\n\twhile converting subcluster bitmap"));
 		exit(1);
-	}
-
-	retval = ext2fs_count_used_clusters(fs, fs->super->s_first_data_block,
-					ext2fs_blocks_count(fs->super) - 1,
-					&overhead);
-	if (retval) {
-		com_err(program_name, retval, "%s",
-			_("while calculating overhead"));
-		exit(1);
-	}
-
-	if (bb_list) {
-		retval = ext2fs_badblocks_list_iterate_begin(bb_list,
-							     &bb_iter);
-		if (retval) {
-			com_err("ext2fs_badblocks_list_iterate_begin", retval,
-				"%s", _("while marking bad blocks as used"));
-			exit(1);
-		}
-		while (ext2fs_badblocks_list_iterate(bb_iter, &blk))
-			ext2fs_mark_block_bitmap2(fs->block_map, blk);
-		ext2fs_badblocks_list_iterate_end(bb_iter);
 	}
 
 	if (super_only) {
@@ -3336,7 +3262,7 @@ int main (int argc, char *argv[])
 		if (retval) {
 			com_err(program_name, retval,
 				_("while zeroing block %llu at end of filesystem"),
-				(unsigned long long) ret_blk);
+				ret_blk);
 		}
 		write_inode_tables(fs, lazy_itable_init, itable_zeroed);
 		create_root_dir(fs);
@@ -3389,23 +3315,22 @@ int main (int argc, char *argv[])
 		free(journal_device);
 	} else if ((journal_size) ||
 		   ext2fs_has_feature_journal(&fs_param)) {
-		overhead += EXT2FS_NUM_B2C(fs, jparams.num_journal_blocks + jparams.num_fc_blocks);
 		if (super_only) {
 			printf("%s", _("Skipping journal creation in super-only mode\n"));
 			fs->super->s_journal_inum = EXT2_JOURNAL_INO;
 			goto no_journal;
 		}
 
-		if (!jparams.num_journal_blocks) {
+		if (!journal_blocks) {
 			ext2fs_clear_feature_journal(fs->super);
 			goto no_journal;
 		}
 		if (!quiet) {
 			printf(_("Creating journal (%u blocks): "),
-			       jparams.num_journal_blocks + jparams.num_fc_blocks);
+			       journal_blocks);
 			fflush(stdout);
 		}
-		retval = ext2fs_add_journal_inode3(fs, &jparams,
+		retval = ext2fs_add_journal_inode2(fs, journal_blocks,
 						   journal_location,
 						   journal_flags);
 		if (retval) {
@@ -3431,10 +3356,6 @@ no_journal:
 				 "with update interval %d seconds.\n"),
 			       fs->super->s_mmp_update_interval);
 	}
-
-	overhead += fs->super->s_first_data_block;
-	if (!super_only)
-		fs->super->s_overhead_clusters = overhead;
 
 	if (ext2fs_has_feature_bigalloc(&fs_param))
 		fix_cluster_bg_counts(fs);

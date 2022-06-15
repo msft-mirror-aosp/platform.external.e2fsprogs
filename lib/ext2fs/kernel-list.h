@@ -1,8 +1,6 @@
 #ifndef _LINUX_LIST_H
 #define _LINUX_LIST_H
 
-#include "compiler.h"
-
 /*
  * Simple doubly linked list implementation.
  *
@@ -103,7 +101,7 @@ static __inline__ void list_splice(struct list_head *list, struct list_head *hea
 }
 
 #define list_entry(ptr, type, member) \
-	container_of(ptr, type, member)
+	((type *)((char *)(ptr)-(unsigned long)(&((type *)0)->member)))
 
 #define list_for_each(pos, head) \
         for (pos = (head)->next; pos != (head); pos = pos->next)

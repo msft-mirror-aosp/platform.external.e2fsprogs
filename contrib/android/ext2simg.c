@@ -24,14 +24,16 @@
 #include <sparse/sparse.h>
 
 struct {
-	bool	crc;
-	bool	sparse;
-	bool	gzip;
+	int	crc;
+	int	sparse;
+	int	gzip;
 	char	*in_file;
 	char	*out_file;
 	bool	overwrite_input;
 } params = {
-	.sparse	    = true,
+	.crc	    = 0,
+	.sparse	    = 1,
+	.gzip	    = 0,
 };
 
 #define ext2fs_fatal(Retval, Format, ...) \
@@ -58,41 +60,39 @@ static void usage(char *path)
 
 static struct buf_item {
 	struct buf_item	    *next;
-	void		    *buf[];
+	void		    *buf[0];
 } *buf_list;
 
-/*
- * Add @num_blks blocks, starting at index @chunk_start, of the filesystem @fs
- * to the sparse file @s.
- */
-static void add_chunk(ext2_filsys fs, struct sparse_file *s,
-		      blk_t chunk_start, int num_blks)
+static void add_chunk(ext2_filsys fs, struct sparse_file *s, blk_t chunk_start, blk_t chunk_end)
 {
-	uint64_t len = (uint64_t)num_blks * fs->blocksize;
-	int64_t offset = (int64_t)chunk_start * fs->blocksize;
-	struct buf_item *bi;
 	int retval;
+	unsigned int nb_blk = chunk_end - chunk_start;
+	size_t len = nb_blk * fs->blocksize;
+	int64_t offset = (int64_t)chunk_start * (int64_t)fs->blocksize;
 
-	if (!params.overwrite_input) {
+	if (params.overwrite_input == false) {
 		if (sparse_file_add_file(s, params.in_file, offset, len, chunk_start) < 0)
 			sparse_fatal("adding data to the sparse file");
-		return;
+	} else {
+		/*
+		 * The input file will be overwritten, make a copy of
+		 * the blocks
+		 */
+		struct buf_item *bi = calloc(1, sizeof(struct buf_item) + len);
+		if (buf_list == NULL)
+			buf_list = bi;
+		else {
+			bi->next = buf_list;
+			buf_list = bi;
+		}
+
+		retval = io_channel_read_blk64(fs->io, chunk_start, nb_blk, bi->buf);
+		if (retval < 0)
+			ext2fs_fatal(retval, "reading block %u - %u", chunk_start, chunk_end);
+
+		if (sparse_file_add_data(s, bi->buf, len, chunk_start) < 0)
+			sparse_fatal("adding data to the sparse file");
 	}
-
-	/* The input file will be overwritten, so make a copy of the blocks. */
-	if (len > SIZE_MAX - sizeof(*bi))
-		sparse_fatal("filesystem is too large");
-	bi = calloc(1, sizeof(*bi) + len);
-	if (!bi)
-		sparse_fatal("out of memory");
-	bi->next = buf_list;
-	buf_list = bi;
-	retval = io_channel_read_blk64(fs->io, chunk_start, num_blks, bi->buf);
-	if (retval)
-		ext2fs_fatal(retval, "reading data from %s", params.in_file);
-
-	if (sparse_file_add_data(s, bi->buf, len, chunk_start) < 0)
-		sparse_fatal("adding data to the sparse file");
 }
 
 static void free_chunks(void)
@@ -106,23 +106,13 @@ static void free_chunks(void)
 	}
 }
 
-static blk_t fs_blocks_count(ext2_filsys fs)
-{
-	blk64_t blks = ext2fs_blocks_count(fs->super);
-
-	/* libsparse assumes 32-bit block numbers. */
-	if ((blk_t)blks != blks)
-		sparse_fatal("filesystem is too large");
-	return blks;
-}
-
 static struct sparse_file *ext_to_sparse(const char *in_file)
 {
 	errcode_t retval;
 	ext2_filsys fs;
 	struct sparse_file *s;
 	int64_t chunk_start = -1;
-	blk_t fs_blks, cur_blk;
+	blk_t first_blk, last_blk, nb_blk, cur_blk;
 
 	retval = ext2fs_open(in_file, 0, 0, 0, unix_io_manager, &fs);
 	if (retval)
@@ -132,9 +122,11 @@ static struct sparse_file *ext_to_sparse(const char *in_file)
 	if (retval)
 		ext2fs_fatal(retval, "while reading block bitmap of %s", in_file);
 
-	fs_blks = fs_blocks_count(fs);
+	first_blk = ext2fs_get_block_bitmap_start2(fs->block_map);
+	last_blk = ext2fs_get_block_bitmap_end2(fs->block_map);
+	nb_blk = last_blk - first_blk + 1;
 
-	s = sparse_file_new(fs->blocksize, (uint64_t)fs_blks * fs->blocksize);
+	s = sparse_file_new(fs->blocksize, (uint64_t)fs->blocksize * (uint64_t)nb_blk);
 	if (!s)
 		sparse_fatal("creating sparse file");
 
@@ -146,39 +138,24 @@ static struct sparse_file *ext_to_sparse(const char *in_file)
 	 * larger than INT32_MAX (32-bit _and_ 64-bit systems).
 	 * Make sure we do not create chunks larger than this limit.
 	 */
-	int32_t max_blk_per_chunk = (INT32_MAX - 12) / fs->blocksize;
+	int64_t max_blk_per_chunk = (INT32_MAX - 12) / fs->blocksize;
 
-	/*
-	 * Iterate through the filesystem's blocks, identifying "chunks" that
-	 * are contiguous ranges of blocks that are in-use by the filesystem.
-	 * Add each chunk to the sparse_file.
-	 */
-	for (cur_blk = ext2fs_get_block_bitmap_start2(fs->block_map);
-	     cur_blk < fs_blks; ++cur_blk) {
+	/* Iter on the blocks to merge contiguous chunk */
+	for (cur_blk = first_blk; cur_blk <= last_blk; ++cur_blk) {
 		if (ext2fs_test_block_bitmap2(fs->block_map, cur_blk)) {
-			/*
-			 * @cur_blk is in-use.  Append it to the pending chunk
-			 * if there is one, otherwise start a new chunk.
-			 */
 			if (chunk_start == -1) {
 				chunk_start = cur_blk;
 			} else if (cur_blk - chunk_start + 1 == max_blk_per_chunk) {
-				/*
-				 * Appending @cur_blk to the pending chunk made
-				 * it reach the maximum length, so end it.
-				 */
-				add_chunk(fs, s, chunk_start, max_blk_per_chunk);
+				add_chunk(fs, s, chunk_start, cur_blk);
 				chunk_start = -1;
 			}
 		} else if (chunk_start != -1) {
-			/* @cur_blk is not in-use, so end the pending chunk. */
-			add_chunk(fs, s, chunk_start, cur_blk - chunk_start);
+			add_chunk(fs, s, chunk_start, cur_blk);
 			chunk_start = -1;
 		}
 	}
-	/* If there's still a pending chunk, end it. */
 	if (chunk_start != -1)
-		add_chunk(fs, s, chunk_start, cur_blk - chunk_start);
+		add_chunk(fs, s, chunk_start, cur_blk - 1);
 
 	ext2fs_free(fs);
 	return s;
@@ -188,14 +165,14 @@ static bool same_file(const char *in, const char *out)
 {
 	struct stat st1, st2;
 
-	if (stat(in, &st1) == -1)
+	if (access(out, F_OK) == -1)
+		return false;
+
+	if (lstat(in, &st1) == -1)
 		ext2fs_fatal(errno, "stat %s\n", in);
-	if (stat(out, &st2) == -1) {
-		if (errno == ENOENT)
-			return false;
+	if (lstat(out, &st2) == -1)
 		ext2fs_fatal(errno, "stat %s\n", out);
-	}
-	return st1.st_dev == st2.st_dev && st1.st_ino == st2.st_ino;
+	return st1.st_ino == st2.st_ino;
 }
 
 int main(int argc, char *argv[])
@@ -207,13 +184,13 @@ int main(int argc, char *argv[])
 	while ((opt = getopt(argc, argv, "czS")) != -1) {
 		switch(opt) {
 		case 'c':
-			params.crc = true;
+			params.crc = 1;
 			break;
 		case 'z':
-			params.gzip = true;
+			params.gzip = 1;
 			break;
 		case 'S':
-			params.sparse = false;
+			params.sparse = 0;
 			break;
 		default:
 			usage(argv[0]);

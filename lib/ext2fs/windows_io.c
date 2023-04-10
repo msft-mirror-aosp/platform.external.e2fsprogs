@@ -499,9 +499,6 @@ static errcode_t windows_open_channel(struct windows_private_data *data,
 #if defined(O_DIRECT)
 	if (flags & IO_FLAG_DIRECT_IO)
 		io->align = ext2fs_get_dio_alignment(data->dev);
-#elif defined(F_NOCACHE)
-	if (flags & IO_FLAG_DIRECT_IO)
-		io->align = 4096;
 #endif
 
 	/*
@@ -609,7 +606,7 @@ static struct windows_private_data *init_private_data(const char *name, int flag
 		return NULL;
 
 	memset(data, 0, sizeof(struct windows_private_data));
-	strncpy(data->name, name, sizeof(data->name));
+	strncpy(data->name, name, sizeof(data->name) - 1);
 	data->magic = EXT2_ET_MAGIC_WINDOWS_IO_CHANNEL;
 	data->io_stats.num_fields = 2;
 	data->flags = flags;
@@ -620,7 +617,6 @@ static struct windows_private_data *init_private_data(const char *name, int flag
 
 static errcode_t windows_open(const char *name, int flags, io_channel *channel)
 {
-	int fd = -1;
 	int open_flags;
 	struct windows_private_data *data;
 
@@ -644,12 +640,6 @@ static errcode_t windows_open(const char *name, int flags, io_channel *channel)
 		return EXT2_ET_BAD_DEVICE_NAME;
 	}
 
-#if defined(F_NOCACHE) && !defined(IO_DIRECT)
-	if (flags & IO_FLAG_DIRECT_IO) {
-		if (fcntl(fd, F_NOCACHE, 1) < 0)
-			return errno;
-	}
-#endif
 	return windows_open_channel(data, flags, channel, windows_io_manager);
 }
 
@@ -865,17 +855,6 @@ static errcode_t windows_write_byte(io_channel channel, unsigned long offset,
 				 int size, const void *buf)
 {
 	return EXT2_ET_UNIMPLEMENTED;
-}
-
-HANDLE windows_get_handle(io_channel channel)
-{
-	struct windows_private_data *data;
-
-	EXT2_CHECK_MAGIC_RETURN(channel, EXT2_ET_MAGIC_IO_CHANNEL, INVALID_HANDLE_VALUE);
-	data = (struct windows_private_data *) channel->private_data;
-	EXT2_CHECK_MAGIC_RETURN(data, EXT2_ET_MAGIC_WINDOWS_IO_CHANNEL, INVALID_HANDLE_VALUE);
-
-	return data->handle;
 }
 
 /*

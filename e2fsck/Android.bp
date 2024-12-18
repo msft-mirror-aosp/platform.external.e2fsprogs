@@ -66,6 +66,7 @@ cc_binary {
 
     shared_libs: e2fsck_libs,
     required: ["badblocks"],
+    bootstrap: true,
 }
 
 cc_binary {

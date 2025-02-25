@@ -29,6 +29,7 @@ cc_library {
 
     srcs: [
         "create_inode.c",
+        "create_inode_libarchive.c",
     ],
     shared_libs: [
         "libext2fs",
@@ -88,6 +89,12 @@ cc_binary {
     defaults: ["mke2fs_device_defaults"],
     target: {
         host: {
+            dist: {
+                targets: [
+                    "dist_files",
+                    "sdk",
+                ],
+            },
             static_libs: [
                 "libext2_blkid",
                 "libext2_misc",

@@ -20,6 +20,7 @@
 #include <unistd.h>
 #endif
 #include <fcntl.h>
+#include <time.h>
 #if HAVE_SYS_STAT_H
 #include <sys/stat.h>
 #endif
@@ -28,7 +29,7 @@
 #endif
 
 #include "ext2_fs.h"
-#include "ext2fsP.h"
+#include "ext2fs.h"
 
 struct set_badblock_record {
 	ext2_badblocks_iterate	bb_iter;
@@ -57,9 +58,8 @@ static int clear_bad_block_proc(ext2_filsys fs, blk_t *block_nr,
 errcode_t ext2fs_update_bb_inode(ext2_filsys fs, ext2_badblocks_list bb_list)
 {
 	errcode_t			retval;
-	struct set_badblock_record	rec;
+	struct set_badblock_record 	rec;
 	struct ext2_inode		inode;
-	time_t				now;
 
 	EXT2_CHECK_MAGIC(fs, EXT2_ET_MAGIC_EXT2FS_FILSYS);
 
@@ -124,11 +124,9 @@ errcode_t ext2fs_update_bb_inode(ext2_filsys fs, ext2_badblocks_list bb_list)
 	if (retval)
 		goto cleanup;
 
-	now = ext2fsP_get_time(fs);
-	ext2fs_inode_xtime_set(&inode, i_atime, now);
-	if (!ext2fs_inode_xtime_get(&inode, i_ctime))
-		ext2fs_inode_xtime_set(&inode, i_ctime, now);
-	ext2fs_inode_xtime_set(&inode, i_mtime, now);
+	inode.i_atime = inode.i_mtime = fs->now ? fs->now : time(0);
+	if (!inode.i_ctime)
+		inode.i_ctime = fs->now ? fs->now : time(0);
 	ext2fs_iblk_set(fs, &inode, rec.bad_block_count);
 	retval = ext2fs_inode_size_set(fs, &inode,
 				       rec.bad_block_count * fs->blocksize);

@@ -40,7 +40,6 @@ extern int optind;
 #include "ext2fs/kernel-jbd.h"
 #include <uuid/uuid.h>
 
-#include "support/devname.h"
 #include "support/nls-enable.h"
 #include "support/plausible.h"
 #include "../version.h"
@@ -85,7 +84,8 @@ static void print_free(unsigned long group, char * bitmap,
 		       unsigned long num, unsigned long offset, int ratio)
 {
 	int p = 0;
-	unsigned long i, j;
+	unsigned long i;
+	unsigned long j;
 
 	offset /= ratio;
 	offset += group * num;
@@ -95,14 +95,13 @@ static void print_free(unsigned long group, char * bitmap,
 			if (p)
 				printf (", ");
 			print_number((i + offset) * ratio);
-			for (j = i + 1; j < num && !in_use(bitmap, j); j++)
+			for (j = i; j < num && !in_use (bitmap, j); j++)
 				;
-			if (j != i + 1 || ratio > 1) {
+			if (--j != i) {
 				fputc('-', stdout);
-				print_number(((j - 1 + offset) * ratio) +
-					     ratio - 1);
+				print_number((j + offset) * ratio);
+				i = j;
 			}
-			i = j;
 			p = 1;
 		}
 }
@@ -674,12 +673,7 @@ int main (int argc, char ** argv)
 	if (optind != argc - 1)
 		usage();
 
-	device_name = get_devname(NULL, argv[optind++], NULL);
-	if (!device_name) {
-		com_err(program_name, 0, _("Unable to resolve '%s'"),
-			argv[1]);
-		exit(1);
-	}
+	device_name = argv[optind++];
 	flags = EXT2_FLAG_JOURNAL_DEV_OK | EXT2_FLAG_SOFTSUPP_FEATURES |
 		EXT2_FLAG_64BITS | EXT2_FLAG_THREADS;
 	if (force)

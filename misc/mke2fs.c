@@ -90,14 +90,11 @@ static int	force;
 static int	noaction;
 static int	num_backups = 2; /* number of backup bg's for sparse_super2 */
 static uid_t	root_uid;
-static mode_t 	root_perms = (mode_t)-1;
 static gid_t	root_gid;
 int	journal_size;
 int	journal_flags;
 int	journal_fc_size;
-static e2_blkcnt_t	orphan_file_blocks;
 static int	lazy_itable_init;
-static int	assume_storage_prezeroed;
 static int	packed_meta_blocks;
 int		no_copy_xattrs;
 static char	*bad_blocks_filename = NULL;
@@ -118,7 +115,7 @@ static char *mount_dir;
 char *journal_device;
 static int sync_kludge;	/* Set using the MKE2FS_SYNC env. option */
 char **fs_types;
-const char *src_root;  /* Copy files from the specified directory or tarball */
+const char *src_root_dir;  /* Copy files from the specified directory */
 static char *undo_file;
 
 static int android_sparse_file; /* -E android_sparse */
@@ -135,12 +132,12 @@ static void usage(void)
 	"[-C cluster-size]\n\t[-i bytes-per-inode] [-I inode-size] "
 	"[-J journal-options]\n"
 	"\t[-G flex-group-size] [-N number-of-inodes] "
-	"[-d root-directory|tarball]\n"
+	"[-d root-directory]\n"
 	"\t[-m reserved-blocks-percentage] [-o creator-os]\n"
 	"\t[-g blocks-per-group] [-L volume-label] "
 	"[-M last-mounted-directory]\n\t[-O feature[,...]] "
-	"[-E extended-option[,...]] [-t fs-type]\n"
-	"\t[-T usage-type ] [-U UUID] [-e errors_behavior]"
+	"[-r fs-revision] [-E extended-option[,...]]\n"
+	"\t[-t fs-type] [-T usage-type ] [-U UUID] [-e errors_behavior]"
 	"[-z undo_file]\n"
 	"\t[-jnqvDFSV] device [blocks-count]\n"),
 		program_name);
@@ -416,9 +413,9 @@ static errcode_t packed_allocate_tables(ext2_filsys fs)
 static void write_inode_tables(ext2_filsys fs, int lazy_flag, int itable_zeroed)
 {
 	errcode_t	retval;
-	blk64_t		start = 0;
+	blk64_t		blk;
 	dgrp_t		i;
-	int		len = 0;
+	int		num;
 	struct ext2fs_numeric_progress_struct progress;
 
 	ext2fs_numeric_progress_init(fs, &progress,
@@ -426,10 +423,10 @@ static void write_inode_tables(ext2_filsys fs, int lazy_flag, int itable_zeroed)
 				     fs->group_desc_count);
 
 	for (i = 0; i < fs->group_desc_count; i++) {
-		blk64_t blk = ext2fs_inode_table_loc(fs, i);
-		int num = fs->inode_blocks_per_group;
-
 		ext2fs_numeric_progress_update(fs, &progress, i);
+
+		blk = ext2fs_inode_table_loc(fs, i);
+		num = fs->inode_blocks_per_group;
 
 		if (lazy_flag)
 			num = ext2fs_div_ceil((fs->super->s_inodes_per_group -
@@ -442,26 +439,14 @@ static void write_inode_tables(ext2_filsys fs, int lazy_flag, int itable_zeroed)
 			ext2fs_group_desc_csum_set(fs, i);
 		}
 		if (!itable_zeroed) {
-			if (len == 0) {
-				start = blk;
-				len = num;
-				continue;
-			}
-			/* 'len' must not overflow 2^31 blocks for ext2fs_zero_blocks2() */
-			if (start + len == blk && len + num >= len) {
-				len += num;
-				continue;
-			}
-			retval = ext2fs_zero_blocks2(fs, start, len, &start, &len);
+			retval = ext2fs_zero_blocks2(fs, blk, num, &blk, &num);
 			if (retval) {
 				fprintf(stderr, _("\nCould not write %d "
 					  "blocks in inode table starting at %llu: %s\n"),
-					len, (unsigned long long) start,
+					num, (unsigned long long) blk,
 					error_message(retval));
 				exit(1);
 			}
-			start = blk;
-			len = num;
 		}
 		if (sync_kludge) {
 			if (sync_kludge == 1)
@@ -469,18 +454,6 @@ static void write_inode_tables(ext2_filsys fs, int lazy_flag, int itable_zeroed)
 			else if ((i % sync_kludge) == 0)
 				io_channel_flush(fs->io);
 		}
-	}
-	if (len) {
-		retval = ext2fs_zero_blocks2(fs, start, len, &start, &len);
-		if (retval) {
-			fprintf(stderr, _("\nCould not write %d "
-				  "blocks in inode table starting at %llu: %s\n"),
-				len, (unsigned long long) start,
-				error_message(retval));
-			exit(1);
-		}
-		if (sync_kludge)
-			io_channel_flush(fs->io);
 	}
 	ext2fs_numeric_progress_close(fs, &progress,
 				      _("done                            \n"));
@@ -494,7 +467,6 @@ static void create_root_dir(ext2_filsys fs)
 {
 	errcode_t		retval;
 	struct ext2_inode	inode;
-	int need_inode_change;
 
 	retval = ext2fs_mkdir(fs, EXT2_ROOT_INO, EXT2_ROOT_INO, 0);
 	if (retval) {
@@ -502,30 +474,19 @@ static void create_root_dir(ext2_filsys fs)
 			_("while creating root dir"));
 		exit(1);
 	}
-
-	need_inode_change = (int)(root_uid != 0 || root_gid != 0 || root_perms != (mode_t)-1);
-
-	if (need_inode_change) {
+	if (root_uid != 0 || root_gid != 0) {
 		retval = ext2fs_read_inode(fs, EXT2_ROOT_INO, &inode);
 		if (retval) {
 			com_err("ext2fs_read_inode", retval, "%s",
 				_("while reading root inode"));
 			exit(1);
 		}
-	}
 
-	if (root_uid != 0 || root_gid != 0) {
 		inode.i_uid = root_uid;
 		ext2fs_set_i_uid_high(inode, root_uid >> 16);
 		inode.i_gid = root_gid;
 		ext2fs_set_i_gid_high(inode, root_gid >> 16);
-	}
 
-	if (root_perms != (mode_t)-1) {
-		inode.i_mode = LINUX_S_IFDIR | root_perms;
-	}
-
-	if (need_inode_change) {
 		retval = ext2fs_write_new_inode(fs, EXT2_ROOT_INO, &inode);
 		if (retval) {
 			com_err("ext2fs_write_inode", retval, "%s",
@@ -836,9 +797,10 @@ static int set_os(struct ext2_super_block *sb, char *os)
 static void parse_extended_opts(struct ext2_super_block *param,
 				const char *opts)
 {
-	unsigned long ulong;
 	char	*buf, *token, *next, *p, *arg, *badopt = 0;
-	int	len, ret, r_usage = 0;
+	int	len;
+	int	r_usage = 0;
+	int	ret;
 	int	encoding = -1;
 	char 	*encoding_flags = NULL;
 
@@ -864,6 +826,8 @@ static void parse_extended_opts(struct ext2_super_block *param,
 		}
 		if (strcmp(token, "desc-size") == 0 ||
 		    strcmp(token, "desc_size") == 0) {
+			int desc_size;
+
 			if (!ext2fs_has_feature_64bit(&fs_param)) {
 				fprintf(stderr,
 					_("%s requires '-O 64bit'\n"), token);
@@ -882,14 +846,14 @@ static void parse_extended_opts(struct ext2_super_block *param,
 				badopt = token;
 				continue;
 			}
-			ulong = strtoul(arg, &p, 0);
-			if (*p || (ulong & (ulong - 1))) {
+			desc_size = strtoul(arg, &p, 0);
+			if (*p || (desc_size & (desc_size - 1))) {
 				fprintf(stderr,
 					_("Invalid desc_size: '%s'\n"), arg);
 				r_usage++;
 				continue;
 			}
-			param->s_desc_size = ulong;
+			param->s_desc_size = desc_size;
 		} else if (strcmp(token, "hash_seed") == 0) {
 			if (!arg) {
 				r_usage++;
@@ -1041,24 +1005,6 @@ static void parse_extended_opts(struct ext2_super_block *param,
 
 				param->s_reserved_gdt_blocks = rsv_gdb;
 			}
-		} else if (!strcmp(token, "revision")) {
-			if (!arg) {
-				r_usage++;
-				badopt = token;
-				continue;
-			}
-			param->s_rev_level = strtoul(arg, &p, 0);
-			if (*p) {
-				com_err(program_name, 0,
-					_("bad revision level - %s"), arg);
-				exit(1);
-			}
-			if (param->s_rev_level > EXT2_MAX_SUPP_REV) {
-				com_err(program_name, EXT2_ET_REV_TOO_HIGH,
-					_("while trying to create revision %d"),
-					param->s_rev_level);
-				exit(1);
-			}
 		} else if (!strcmp(token, "test_fs")) {
 			param->s_flags |= EXT2_FLAGS_TEST_FILESYS;
 		} else if (!strcmp(token, "lazy_itable_init")) {
@@ -1066,11 +1012,6 @@ static void parse_extended_opts(struct ext2_super_block *param,
 				lazy_itable_init = strtoul(arg, &p, 0);
 			else
 				lazy_itable_init = 1;
-		} else if (!strcmp(token, "assume_storage_prezeroed")) {
-			if (arg)
-				assume_storage_prezeroed = strtoul(arg, &p, 0);
-			else
-				assume_storage_prezeroed = 1;
 		} else if (!strcmp(token, "lazy_journal_init")) {
 			if (arg)
 				journal_flags |= strtoul(arg, &p, 0) ?
@@ -1099,10 +1040,6 @@ static void parse_extended_opts(struct ext2_super_block *param,
 			} else {
 				root_uid = getuid();
 				root_gid = getgid();
-			}
-		} else if (!strcmp(token, "root_perms")) {
-			if (arg) {
-				root_perms = strtoul(arg, &p, 8);
 			}
 		} else if (!strcmp(token, "discard")) {
 			discard = 1;
@@ -1152,21 +1089,6 @@ static void parse_extended_opts(struct ext2_super_block *param,
 				continue;
 			}
 			encoding_flags = arg;
-		} else if (!strcmp(token, "orphan_file_size")) {
-			if (!arg) {
-				r_usage++;
-				badopt = token;
-				continue;
-			}
-			orphan_file_blocks = parse_num_blocks2(arg,
-						fs_param.s_log_block_size);
-			if (orphan_file_blocks == 0) {
-				fprintf(stderr,
-					_("Invalid size of orphan file %s\n"),
-					arg);
-				r_usage++;
-				continue;
-			}
 		} else {
 			r_usage++;
 			badopt = token;
@@ -1188,15 +1110,12 @@ static void parse_extended_opts(struct ext2_super_block *param,
 			"\tlazy_itable_init=<0 to disable, 1 to enable>\n"
 			"\tlazy_journal_init=<0 to disable, 1 to enable>\n"
 			"\troot_owner=<uid of root dir>:<gid of root dir>\n"
-			"\troot_perms=<octal root directory permissions>\n"
 			"\ttest_fs\n"
 			"\tdiscard\n"
 			"\tnodiscard\n"
-			"\trevision=<revision>\n"
 			"\tencoding=<encoding>\n"
 			"\tencoding_flags=<flags>\n"
-			"\tquotatype=<quota type(s) to be enabled>\n"
-			"\tassume_storage_prezeroed=<0 to disable, 1 to enable>\n\n"),
+			"\tquotatype=<quota type(s) to be enabled>\n\n"),
 			badopt ? badopt : "");
 		free(buf);
 		exit(1);
@@ -1237,8 +1156,7 @@ static __u32 ok_features[3] = {
 		EXT2_FEATURE_COMPAT_EXT_ATTR |
 		EXT4_FEATURE_COMPAT_SPARSE_SUPER2 |
 		EXT4_FEATURE_COMPAT_FAST_COMMIT |
-		EXT4_FEATURE_COMPAT_STABLE_INODES |
-		EXT4_FEATURE_COMPAT_ORPHAN_FILE,
+		EXT4_FEATURE_COMPAT_STABLE_INODES,
 	/* Incompat */
 	EXT2_FEATURE_INCOMPAT_FILETYPE|
 		EXT3_FEATURE_INCOMPAT_EXTENTS|
@@ -1633,8 +1551,6 @@ static void PRS(int argc, char *argv[])
 	int		lsector_size = 0, psector_size = 0;
 	int		show_version_only = 0, is_device = 0;
 	unsigned long long num_inodes = 0; /* unsigned long long to catch too-large input */
-	int		default_orphan_file = 0;
-	int		default_csum_seed = 0;
 	errcode_t	retval;
 	char *		oldpath = getenv("PATH");
 	char *		extended_opts = 0;
@@ -1656,7 +1572,7 @@ static void PRS(int argc, char *argv[])
 	 * Finally, we complain about fs_blocks_count > 2^32 on a non-64bit fs.
 	 */
 	blk64_t		fs_blocks_count = 0;
-	int		r_opt = -1;
+	int		s_opt = -1, r_opt = -1;
 	char		*fs_features = 0;
 	int		fs_features_size = 0;
 	int		use_bsize;
@@ -1770,7 +1686,7 @@ profile_error:
 			}
 			break;
 		case 'd':
-			src_root = optarg;
+			src_root_dir = optarg;
 			break;
 		case 'D':
 			direct_io = 1;
@@ -1944,20 +1860,11 @@ profile_error:
 					_("while trying to create revision %d"), r_opt);
 				exit(1);
 			}
-			if (r_opt != EXT2_DYNAMIC_REV) {
-				com_err(program_name, 0,
-	_("the -r option has been removed.\n\n"
-	"If you really need compatibility with pre-1995 Linux systems, use the\n"
-	"command-line option \"-E revision=0\".\n"));
-				exit(1);
-			}
 			fs_param.s_rev_level = r_opt;
 			break;
-		case 's':
-			com_err(program_name, 0,
-				_("the -s option has been removed.\n\n"
-	"Use the -O option to set or clear the sparse_super feature.\n"));
-			exit(1);
+		case 's':	/* deprecated */
+			s_opt = atoi(optarg);
+			break;
 		case 'S':
 			super_only = 1;
 			break;
@@ -2098,8 +2005,7 @@ profile_error:
 			dev_size = 0;
 			retval = 0;
 			close(fd);
-			if (!quiet)
-				printf(_("Creating regular file %s\n"), device_name);
+			printf(_("Creating regular file %s\n"), device_name);
 		}
 	}
 	if (retval && (retval != EXT2_ET_UNIMPLEMENTED)) {
@@ -2197,26 +2103,11 @@ profile_error:
 		ext2fs_clear_feature_ea_inode(&fs_param);
 		ext2fs_clear_feature_casefold(&fs_param);
 	}
-	if (!fs_features && tmp)
-		edit_feature(tmp, &fs_param.s_feature_compat);
-	/*
-	 * Now all the defaults are incorporated in fs_param. Check the state
-	 * of orphan_file feature so that we know whether we should silently
-	 * disabled in case journal gets disabled.
-	 */
-	if (ext2fs_has_feature_orphan_file(&fs_param))
-		default_orphan_file = 1;
-	if (ext2fs_has_feature_csum_seed(&fs_param))
-		default_csum_seed = 1;
-	if (fs_features)
-		edit_feature(fs_features, &fs_param.s_feature_compat);
-	/* Silently disable orphan_file if user chose fs without journal */
-	if (default_orphan_file && !ext2fs_has_feature_journal(&fs_param))
-		ext2fs_clear_feature_orphan_file(&fs_param);
-	if (default_csum_seed && !ext2fs_has_feature_metadata_csum(&fs_param))
-		ext2fs_clear_feature_csum_seed(&fs_param);
+	edit_feature(fs_features ? fs_features : tmp,
+		     &fs_param.s_feature_compat);
 	if (tmp)
 		free(tmp);
+	(void) ext2fs_free_mem(&fs_features);
 	/*
 	 * If the user specified features incompatible with the Hurd, complain
 	 */
@@ -2354,8 +2245,33 @@ profile_error:
 		print_str_list(fs_types);
 	}
 
-	if (journal_size != 0)
+	if (r_opt == EXT2_GOOD_OLD_REV &&
+	    (fs_param.s_feature_compat || fs_param.s_feature_incompat ||
+	     fs_param.s_feature_ro_compat)) {
+		fprintf(stderr, "%s", _("Filesystem features not supported "
+					"with revision 0 filesystems\n"));
+		exit(1);
+	}
+
+	if (s_opt > 0) {
+		if (r_opt == EXT2_GOOD_OLD_REV) {
+			fprintf(stderr, "%s",
+				_("Sparse superblocks not supported "
+				  "with revision 0 filesystems\n"));
+			exit(1);
+		}
+		ext2fs_set_feature_sparse_super(&fs_param);
+	} else if (s_opt == 0)
+		ext2fs_clear_feature_sparse_super(&fs_param);
+
+	if (journal_size != 0) {
+		if (r_opt == EXT2_GOOD_OLD_REV) {
+			fprintf(stderr, "%s", _("Journals not supported with "
+						"revision 0 filesystems\n"));
+			exit(1);
+		}
 		ext2fs_set_feature_journal(&fs_param);
+	}
 
 	/* Get reserved_ratio from profile if not specified on cmd line. */
 	if (reserved_ratio < 0.0) {
@@ -2560,28 +2476,6 @@ profile_error:
 	if (extended_opts)
 		parse_extended_opts(&fs_param, extended_opts);
 
-	if (fs_param.s_rev_level == EXT2_GOOD_OLD_REV) {
-		if (fs_features) {
-			fprintf(stderr, "%s",
-				_("Filesystem features not supported "
-				  "with revision 0 filesystems\n"));
-			exit(1);
-		}
-		if (journal_size != 0) {
-			fprintf(stderr, "%s", _("Journals not supported with "
-						"revision 0 filesystems\n"));
-			exit(1);
-		}
-		if (fs_param.s_inode_size > EXT2_GOOD_OLD_INODE_SIZE) {
-			fprintf(stderr, "%s", _("Inode size incompatible with "
-						"revision 0 filesystems\n"));
-			exit(1);
-		}
-		fs_param.s_feature_compat = fs_param.s_feature_ro_compat =
-			fs_param.s_feature_incompat = 0;
-		fs_param.s_default_mount_opts = 0;
-	}
-
 	if (explicit_fssize == 0 && offset > 0) {
 		fs_blocks_count -= offset / EXT2_BLOCK_SIZE(&fs_param);
 		ext2fs_blocks_count_set(&fs_param, fs_blocks_count);
@@ -2783,7 +2677,6 @@ _("128-byte inodes cannot handle dates beyond 2038 and are deprecated\n"));
 
 	free(fs_type);
 	free(usage_types);
-	(void) ext2fs_free_mem(&fs_features);
 
 	/* The isatty() test is so we don't break existing scripts */
 	flags = CREATE_FILE;
@@ -3204,18 +3097,6 @@ int main (int argc, char *argv[])
 		io_channel_set_options(fs->io, opt_string);
 	}
 
-	if (assume_storage_prezeroed) {
-		if (verbose)
-			printf("%s",
-			       _("Assuming the storage device is prezeroed "
-			       "- skipping inode table and journal wipe\n"));
-
-		lazy_itable_init = 1;
-		itable_zeroed = 1;
-		zero_hugefile = 0;
-		journal_flags |= EXT2_MKJOURNAL_LAZYINIT;
-	}
-
 	/* Can't undo discard ... */
 	if (!noaction && discard && dev_size && (io_ptr != undo_io_manager)) {
 		retval = mke2fs_discard_device(fs);
@@ -3550,9 +3431,6 @@ int main (int argc, char *argv[])
 
 		if (!jparams.num_journal_blocks) {
 			ext2fs_clear_feature_journal(fs->super);
-			ext2fs_clear_feature_orphan_file(fs->super);
-			ext2fs_clear_feature_journal(&fs_param);
-			ext2fs_clear_feature_orphan_file(&fs_param);
 			goto no_journal;
 		}
 		if (!quiet) {
@@ -3587,7 +3465,7 @@ no_journal:
 			       fs->super->s_mmp_update_interval);
 	}
 
-	overhead += EXT2FS_NUM_B2C(fs, fs->super->s_first_data_block);
+	overhead += fs->super->s_first_data_block;
 	if (!super_only)
 		fs->super->s_overhead_clusters = overhead;
 
@@ -3595,33 +3473,16 @@ no_journal:
 		fix_cluster_bg_counts(fs);
 	if (ext2fs_has_feature_quota(&fs_param))
 		create_quota_inodes(fs);
-	if (ext2fs_has_feature_orphan_file(&fs_param)) {
-		if (!ext2fs_has_feature_journal(&fs_param)) {
-			com_err(program_name, 0, _("cannot set orphan_file "
-				"feature without a journal."));
-			exit(1);
-		}
-		if (!orphan_file_blocks) {
-			orphan_file_blocks =
-				ext2fs_default_orphan_file_blocks(fs);
-		}
-		retval = ext2fs_create_orphan_file(fs, orphan_file_blocks);
-		if (retval) {
-			com_err(program_name, retval,
-				_("while creating orphan file"));
-			exit(1);
-		}
-	}
 
 	retval = mk_hugefiles(fs, device_name);
 	if (retval)
 		com_err(program_name, retval, "while creating huge files");
-	/* Copy files from the specified directory or tarball */
-	if (src_root) {
+	/* Copy files from the specified directory */
+	if (src_root_dir) {
 		if (!quiet)
 			printf("%s", _("Copying files into the device: "));
 
-		retval = populate_fs(fs, EXT2_ROOT_INO, src_root,
+		retval = populate_fs(fs, EXT2_ROOT_INO, src_root_dir,
 				     EXT2_ROOT_INO);
 		if (retval) {
 			com_err(program_name, retval, "%s",

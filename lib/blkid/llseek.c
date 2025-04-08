@@ -52,7 +52,7 @@ extern long long llseek(int fd, long long offset, int origin);
 
 #if SIZEOF_LONG == SIZEOF_LONG_LONG
 
-#define my_llseek lseek
+#define llseek lseek
 
 #else /* SIZEOF_LONG != SIZEOF_LONG_LONG */
 

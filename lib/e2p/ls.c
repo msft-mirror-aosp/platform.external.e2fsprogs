@@ -313,23 +313,27 @@ void list_super2(struct ext2_super_block * sb, FILE *f)
 	if (sb->s_log_groups_per_flex)
 		fprintf(f, "Flex block group size:    %u\n",
 			1U << sb->s_log_groups_per_flex);
-	tm = ext2fs_get_tstamp(sb, s_mkfs_time);
-	if (tm)
+	if (sb->s_mkfs_time) {
+		tm = sb->s_mkfs_time;
 		fprintf(f, "Filesystem created:       %s", ctime(&tm));
-	tm = ext2fs_get_tstamp(sb, s_mtime);
-	fprintf(f, "Last mount time:          %s", tm ? ctime(&tm) : "n/a\n");
-	tm = ext2fs_get_tstamp(sb, s_wtime);
+	}
+	tm = sb->s_mtime;
+	fprintf(f, "Last mount time:          %s",
+		sb->s_mtime ? ctime(&tm) : "n/a\n");
+	tm = sb->s_wtime;
 	fprintf(f, "Last write time:          %s", ctime(&tm));
 	fprintf(f, "Mount count:              %u\n", sb->s_mnt_count);
 	fprintf(f, "Maximum mount count:      %d\n", sb->s_max_mnt_count);
-	tm = ext2fs_get_tstamp(sb, s_lastcheck);
+	tm = sb->s_lastcheck;
 	fprintf(f, "Last checked:             %s", ctime(&tm));
 	fprintf(f, "Check interval:           %u (%s)\n", sb->s_checkinterval,
 	       interval_string(sb->s_checkinterval));
 	if (sb->s_checkinterval)
 	{
-		tm += sb->s_checkinterval;
-		fprintf(f, "Next check after:         %s", ctime(&tm));
+		time_t next;
+
+		next = sb->s_lastcheck + sb->s_checkinterval;
+		fprintf(f, "Next check after:         %s", ctime(&next));
 	}
 #define POW2(x) ((__u64) 1 << (x))
 	if (sb->s_kbytes_written) {
@@ -356,7 +360,7 @@ void list_super2(struct ext2_super_block * sb, FILE *f)
 	print_group(sb->s_def_resgid, f);
 	if (sb->s_rev_level >= EXT2_DYNAMIC_REV) {
 		fprintf(f, "First inode:              %d\n", sb->s_first_ino);
-		fprintf(f, "Inode size:               %d\n", sb->s_inode_size);
+		fprintf(f, "Inode size:	          %d\n", sb->s_inode_size);
 		if (sb->s_min_extra_isize)
 			fprintf(f, "Required extra isize:     %d\n",
 				sb->s_min_extra_isize);
@@ -371,7 +375,7 @@ void list_super2(struct ext2_super_block * sb, FILE *f)
 		fprintf(f, "Journal inode:            %u\n",
 			sb->s_journal_inum);
 	if (sb->s_journal_dev)
-		fprintf(f, "Journal device:           0x%04x\n",
+		fprintf(f, "Journal device:	          0x%04x\n",
 			sb->s_journal_dev);
 	if (sb->s_last_orphan)
 		fprintf(f, "First orphan inode:       %u\n",
@@ -415,8 +419,8 @@ void list_super2(struct ext2_super_block * sb, FILE *f)
 	if (sb->s_error_count)
 		fprintf(f, "FS Error count:           %u\n",
 			sb->s_error_count);
-	tm = ext2fs_get_tstamp(sb, s_first_error_time);
-	if (tm) {
+	if (sb->s_first_error_time) {
+		tm = sb->s_first_error_time;
 		fprintf(f, "First error time:         %s", ctime(&tm));
 		fprintf(f, "First error function:     %.*s\n",
 			EXT2_LEN_STR(sb->s_first_error_func));
@@ -432,8 +436,8 @@ void list_super2(struct ext2_super_block * sb, FILE *f)
 			fprintf(f, "First error err:          %s\n",
 				e2p_errcode2str(sb->s_first_error_errcode));
 	}
-	tm = ext2fs_get_tstamp(sb, s_last_error_time);
-	if (tm) {
+	if (sb->s_last_error_time) {
+		tm = sb->s_last_error_time;
 		fprintf(f, "Last error time:          %s", ctime(&tm));
 		fprintf(f, "Last error function:      %.*s\n",
 			EXT2_LEN_STR(sb->s_last_error_func));
@@ -478,9 +482,6 @@ void list_super2(struct ext2_super_block * sb, FILE *f)
 	if (ext2fs_has_feature_casefold(sb))
 		fprintf(f, "Character encoding:       %s\n",
 			e2p_encoding2str(sb->s_encoding));
-	if (ext2fs_has_feature_orphan_file(sb))
-		fprintf(f, "Orphan file inode:        %u\n",
-			sb->s_orphan_file_inum);
 }
 
 void list_super (struct ext2_super_block * s)

@@ -34,8 +34,6 @@ typedef struct struct_io_stats *io_stats;
 #define CHANNEL_FLAGS_DISCARD_ZEROES	0x02
 #define CHANNEL_FLAGS_BLOCK_DEVICE	0x04
 #define CHANNEL_FLAGS_THREADS		0x08
-#define CHANNEL_FLAGS_NODISCARD		0x10
-#define CHANNEL_FLAGS_NOZEROOUT		0x20
 
 #define io_channel_discard_zeroes_data(i) (i->flags & CHANNEL_FLAGS_DISCARD_ZEROES)
 
@@ -59,7 +57,7 @@ struct struct_io_channel {
 				       int actual_bytes_written,
 				       errcode_t error);
 	int		refcount;
-	unsigned int	flags;
+	int		flags;
 	long		reserved[14];
 	void		*private_data;
 	void		*app_data;

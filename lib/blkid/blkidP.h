@@ -23,11 +23,8 @@
 #endif
 
 #include <blkid/blkid.h>
-#include <blkid/list.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <blkid/list.h>
 
 #ifdef __GNUC__
 #define __BLKID_ATTR(x) __attribute__(x)
@@ -152,10 +149,8 @@ extern char *blkid_strndup(const char *s, const int length);
 #include <stdio.h>
 extern int	blkid_debug_mask;
 #define DBG(m,x)	if ((m) & blkid_debug_mask) x;
-#define INC_LINENO	lineno++
 #else
 #define DBG(m,x)
-#define INC_LINENO
 #endif
 
 #ifdef CONFIG_BLKID_DEBUG

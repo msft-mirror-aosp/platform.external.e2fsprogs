@@ -130,7 +130,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     ext2fs_close(fs);
   }
   close(fd);
-  remove_error_table(&et_ext2_error_table);
 
   return 0;
 }

@@ -110,9 +110,7 @@ static char *rep_strdup(const char *s)
 #endif
 #endif
 
-#if defined __STDC__ && defined __STDC_VERSION__ && __STDC_VERSION__ <= 201710L
 typedef int bool;
-#endif
 
 #include "tdb.h"
 

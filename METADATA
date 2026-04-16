@@ -5,11 +5,12 @@
 name: "e2fsprogs"
 description: "Ext2/3/4 filesystem userspace utilities"
 third_party {
-  url {
-    type: GIT
+  identifier {
+    type: "Git"
     value: "https://git.kernel.org/pub/scm/fs/ext2/e2fsprogs.git"
+    version: "c3cce4a07efefc62bc7fc57a678cb870af27d0f2"
+    closest_version: "v1.47.2"
   }
-  version: "v1.47.2"
   license_type: RESTRICTED
   last_upgrade_date {
     year: 2025

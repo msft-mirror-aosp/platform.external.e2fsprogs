@@ -42,6 +42,16 @@ cc_library {
 //########################################################################
 // Build mke2fs
 
+mke2fs_libs = [
+    "libext2fs",
+    "libext2_blkid",
+    "libext2_misc",
+    "libext2_uuid",
+    "libext2_quota",
+    "libext2_com_err",
+    "libext2_e2p",
+]
+
 cc_defaults {
     name: "mke2fs_defaults",
     defaults: ["e2fsprogs-defaults"],
@@ -64,15 +74,7 @@ cc_defaults {
             required: [
                 "mke2fs.conf",
             ],
-            shared_libs: [
-                "libext2fs",
-                "libext2_blkid",
-                "libext2_misc",
-                "libext2_uuid",
-                "libext2_quota",
-                "libext2_com_err",
-                "libext2_e2p",
-            ],
+            shared_libs: mke2fs_libs,
             symlinks: [
                 "mkfs.ext2",
                 "mkfs.ext3",
@@ -95,14 +97,7 @@ cc_binary {
                     "sdk",
                 ],
             },
-            static_libs: [
-                "libext2_blkid",
-                "libext2_misc",
-                "libext2_uuid",
-                "libext2_quota",
-                "libext2_com_err",
-                "libext2_e2p",
-                "libext2fs",
+            static_libs: mke2fs_libs + [
                 "libsparse",
                 "libbase",
                 "libz",
@@ -128,6 +123,20 @@ cc_binary {
 }
 
 cc_binary {
+    name: "mke2fs.ota_recovery",
+    defaults: ["mke2fs_defaults"],
+    stem: "mke2fs",
+    ota_recovery_ramdisk: true,
+    static_libs: mke2fs_libs + [
+        "libsparse",
+        "libz",
+        "libbase",
+        "liblog",
+        "libcutils",
+    ],
+}
+
+cc_binary {
     name: "mke2fs.microdroid",
     defaults: ["mke2fs_defaults"],
     recovery_available: true,
@@ -137,15 +146,7 @@ cc_binary {
             required: [
                 "mke2fs.conf",
             ],
-            shared_libs: [
-                "libext2fs",
-                "libext2_blkid",
-                "libext2_misc",
-                "libext2_uuid",
-                "libext2_quota",
-                "libext2_com_err",
-                "libext2_e2p",
-            ],
+            shared_libs: mke2fs_libs,
             symlinks: ["mkfs.ext4.microdroid"],
         },
     },

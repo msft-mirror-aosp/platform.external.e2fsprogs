@@ -55,6 +55,7 @@ cc_defaults {
         "-Wno-typedef-redefinition",
         "-Wno-unused-parameter",
     ],
+    include_dirs: ["external/e2fsprogs"],
     target: {
         bionic: {
             system_shared_libs: [
